@@ -48,16 +48,14 @@ private:
 	inline uint32_t get_ref_index(const NodeSpec &t_spec) { return (uint32_t)m_refstack.size() - t_spec.m_ref_num; }
 	inline uint32_t build_leaf(const NodeSpec &t_spec);
 
-	template <uint32_t DIM>
-	inline void __find_object_split_dim(const NodeSpec &t_spec, ObjectSplit *t_os, float t_node_sah);
-	inline void find_object_split(const NodeSpec &t_spec, ObjectSplit *t_os, float t_node_sah);
+	template <uint32_t DIM> inline void __find_object_split_dim(const NodeSpec &t_spec, ObjectSplit *t_os);
+	inline void find_object_split(const NodeSpec &t_spec, ObjectSplit *t_os);
 	inline void perform_object_split(const NodeSpec &t_spec, const ObjectSplit &t_os, NodeSpec *t_left,
 	                                 NodeSpec *t_right);
 	inline void split_reference(const Reference &t_ref, uint32_t t_dim, float t_pos, Reference *t_left,
 	                            Reference *t_right);
-	template <uint32_t DIM>
-	inline void __find_spatial_split_dim(const NodeSpec &t_spec, SpatialSplit *t_ss, float t_node_sah);
-	inline void find_spatial_split(const NodeSpec &t_spec, SpatialSplit *t_ss, float t_node_sah);
+	template <uint32_t DIM> inline void __find_spatial_split_dim(const NodeSpec &t_spec, SpatialSplit *t_ss);
+	inline void find_spatial_split(const NodeSpec &t_spec, SpatialSplit *t_ss);
 	inline void perform_spatial_split(const NodeSpec &t_spec, const SpatialSplit &t_ss, NodeSpec *t_left,
 	                                  NodeSpec *t_right);
 	uint32_t build_node(const NodeSpec &t_spec, uint32_t t_depth);
@@ -109,8 +107,7 @@ uint32_t SBVHBuilder::build_leaf(const SBVHBuilder::NodeSpec &t_spec) {
 }
 
 template <uint32_t DIM>
-void SBVHBuilder::__find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::ObjectSplit *t_os,
-                                          float t_node_sah) {
+void SBVHBuilder::__find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::ObjectSplit *t_os) {
 	sort_spec<DIM>(t_spec);
 	Reference *refs = m_refstack.data() + get_ref_index(t_spec);
 
@@ -122,8 +119,7 @@ void SBVHBuilder::__find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, S
 
 	AABB left_aabb = refs->m_aabb;
 	for (uint32_t i = 1; i <= t_spec.m_ref_num - 1; ++i) {
-		float sah = t_node_sah + m_config.GetTriangleCost(i) * left_aabb.GetArea() +
-		            m_config.GetTriangleCost(t_spec.m_ref_num - i) * m_right_aabbs[i].GetArea();
+		float sah = i * left_aabb.GetArea() + (t_spec.m_ref_num - i) * m_right_aabbs[i].GetArea();
 		if (sah < t_os->m_sah) {
 			t_os->m_dim = DIM;
 			t_os->m_left_num = i;
@@ -136,13 +132,12 @@ void SBVHBuilder::__find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, S
 	}
 }
 
-void SBVHBuilder::find_object_split(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::ObjectSplit *t_os,
-                                    float t_node_sah) {
+void SBVHBuilder::find_object_split(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::ObjectSplit *t_os) {
 	t_os->m_sah = FLT_MAX;
 
-	__find_object_split_dim<0>(t_spec, t_os, t_node_sah);
-	__find_object_split_dim<1>(t_spec, t_os, t_node_sah);
-	__find_object_split_dim<2>(t_spec, t_os, t_node_sah);
+	__find_object_split_dim<0>(t_spec, t_os);
+	__find_object_split_dim<1>(t_spec, t_os);
+	__find_object_split_dim<2>(t_spec, t_os);
 }
 
 void SBVHBuilder::split_reference(const SBVHBuilder::Reference &t_ref, uint32_t t_dim, float t_pos,
@@ -177,8 +172,7 @@ void SBVHBuilder::split_reference(const SBVHBuilder::Reference &t_ref, uint32_t 
 }
 
 template <uint32_t DIM>
-void SBVHBuilder::__find_spatial_split_dim(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::SpatialSplit *t_ss,
-                                           float t_node_sah) {
+void SBVHBuilder::__find_spatial_split_dim(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::SpatialSplit *t_ss) {
 	std::fill(m_spatial_bins, m_spatial_bins + kSpatialBinNum, SpatialBin{AABB(), 0, 0}); // initialize bins
 
 	float bin_width = t_spec.m_aabb.GetExtent()[DIM] / kSpatialBinNum, inv_bin_width = 1.0f / bin_width;
@@ -216,8 +210,7 @@ void SBVHBuilder::__find_spatial_split_dim(const SBVHBuilder::NodeSpec &t_spec, 
 		left_num += m_spatial_bins[i - 1].m_in;
 		right_num -= m_spatial_bins[i - 1].m_out;
 
-		float sah = t_node_sah + m_config.GetTriangleCost(left_num) * left_aabb.GetArea() +
-		            m_config.GetTriangleCost(right_num) * m_right_aabbs[i].GetArea();
+		float sah = (left_num)*left_aabb.GetArea() + (right_num)*m_right_aabbs[i].GetArea();
 		if (sah < t_ss->m_sah) {
 			t_ss->m_sah = sah;
 			t_ss->m_dim = DIM;
@@ -228,12 +221,11 @@ void SBVHBuilder::__find_spatial_split_dim(const SBVHBuilder::NodeSpec &t_spec, 
 	}
 }
 
-void SBVHBuilder::find_spatial_split(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::SpatialSplit *t_ss,
-                                     float t_node_sah) {
+void SBVHBuilder::find_spatial_split(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::SpatialSplit *t_ss) {
 	t_ss->m_sah = FLT_MAX;
-	__find_spatial_split_dim<0>(t_spec, t_ss, t_node_sah);
-	__find_spatial_split_dim<1>(t_spec, t_ss, t_node_sah);
-	__find_spatial_split_dim<2>(t_spec, t_ss, t_node_sah);
+	__find_spatial_split_dim<0>(t_spec, t_ss);
+	__find_spatial_split_dim<1>(t_spec, t_ss);
+	__find_spatial_split_dim<2>(t_spec, t_ss);
 }
 
 void SBVHBuilder::perform_spatial_split(const SBVHBuilder::NodeSpec &t_spec, const SBVHBuilder::SpatialSplit &t_ss,
@@ -275,10 +267,10 @@ void SBVHBuilder::perform_spatial_split(const SBVHBuilder::NodeSpec &t_spec, con
 		ldb.Expand(left_ref.m_aabb);
 		rdb.Expand(right_ref.m_aabb);
 
-		float lac = m_config.GetTriangleCost(left_end - left_begin);
-		float rac = m_config.GetTriangleCost(right_end - right_begin);
-		float lbc = m_config.GetTriangleCost(1 + left_end - left_begin);
-		float rbc = m_config.GetTriangleCost(1 + right_end - right_begin);
+		float lac = left_end - left_begin;
+		float rac = right_end - right_begin;
+		float lbc = 1 + left_end - left_begin;
+		float rbc = 1 + right_end - right_begin;
 
 		float unsplit_left_sah = lub.GetArea() * lbc + t_right->m_aabb.GetArea() * rac;
 		float unsplit_right_sah = t_left->m_aabb.GetArea() * lac + rub.GetArea() * rbc;
@@ -319,10 +311,9 @@ uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 		return build_leaf(t_spec);
 
 	float area = t_spec.m_aabb.GetArea();
-	float node_sah = area * m_config.GetNodeCost(2); // C_t * SA(B)
 
 	ObjectSplit object_split;
-	find_object_split(t_spec, &object_split, node_sah);
+	find_object_split(t_spec, &object_split);
 
 	SpatialSplit spatial_split;
 	spatial_split.m_sah = FLT_MAX;
@@ -330,7 +321,7 @@ uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 		AABB overlap = object_split.m_left_aabb;
 		overlap.IntersectAABB(object_split.m_right_aabb);
 		if (overlap.GetArea() >= m_min_overlap_area)
-			find_spatial_split(t_spec, &spatial_split, node_sah);
+			find_spatial_split(t_spec, &spatial_split);
 	}
 
 	uint32_t node = push_node(); // alloc new node

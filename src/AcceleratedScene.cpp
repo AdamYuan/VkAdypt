@@ -128,7 +128,7 @@ void AcceleratedScene::load_textures(const std::shared_ptr<myvk::Queue> &graphic
 				int width, height, channels;
 				stbi_uc *data = stbi_load(texture_filenames[i].c_str(), &width, &height, &channels, 4);
 				if (data == nullptr) {
-					spdlog::error("Unable to load texture {}", texture_filenames[i].c_str());
+					spdlog::error("Unable to load texture {}, {}", texture_filenames[i].c_str(), stbi_failure_reason());
 					continue;
 				}
 				uint32_t data_size = width * height * 4;

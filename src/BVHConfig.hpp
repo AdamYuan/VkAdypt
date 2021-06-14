@@ -10,7 +10,6 @@ struct BVHConfig {
 	inline float GetTriangleCost() const { return m_triangle_sah; }
 	inline float GetNodeCost() const { return m_node_sah; }
 	inline float GetTriangleCost(uint32_t count) const { return m_triangle_sah * count; }
-	inline float GetNodeCost(uint32_t count) const { return m_node_sah * count; }
 	std::array<uint8_t, 12> ToBytes() const;
 	void FromBytes(uint8_t *ptr);
 };
