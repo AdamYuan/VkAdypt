@@ -373,7 +373,7 @@ inline checked_ptr<typename Container::value_type>
 reserve(std::back_insert_iterator<Container> it, size_t n) {
   Container& c = get_container(it);
   size_t size = c.size();
-  c.resize(size + n);
+  c.resize(0, 0);
   return make_checked(get_data(c) + size, n);
 }
 

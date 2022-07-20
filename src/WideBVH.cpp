@@ -12,7 +12,7 @@ bool WideBVH::SaveToFile(const char *filename) {
 	auto tri_indeices_size = (uint32_t)m_tri_indices.size();
 	os.write((char *)&tri_indeices_size, sizeof(uint32_t));
 	os.write((char *)m_tri_indices.data(), m_tri_indices.size() * sizeof(int32_t));
-	os.write((char *)m_nodes.data(), m_nodes.size() * sizeof(WideBVHNode));
+	os.write((char *)m_nodes.data(), m_nodes.size() * sizeof(Node));
 
 	return true;
 }

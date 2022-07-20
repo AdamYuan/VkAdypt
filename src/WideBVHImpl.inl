@@ -1,72 +1,31 @@
-#include "WideBVH.hpp"
-#include <algorithm>
-#include <spdlog/spdlog.h>
+namespace wide_bvh_detail {
 
-class WideBVHBuilder {
-private:
-	const SBVH &m_sbvh;
-	const BVHConfig &m_config;
-	WideBVH *m_wbvh;
-
-	struct NodeCost {
-		float m_sah;
-		enum Type { kInternal = 0, kLeaf, kDistribute };
-		uint32_t m_type;
-		uint32_t m_distribute[2];
-	};
-	struct NodeCostGroup {
-		NodeCost m_arr[7];
-		NodeCost &operator[](uint32_t i) { return m_arr[i - 1]; }
-	};
-
-	std::vector<NodeCostGroup> m_costs;
-	uint32_t calculate_cost(uint32_t node_idx);
-	//{node_idx, i} are the two dimensions of dp array
-	// out_size describes the number of children
-	// out_idx  stores the children index
-	void fetch_children(uint32_t node_idx, uint32_t i, uint32_t *out_size, uint32_t out_node_idx[8]);
-	//
-	uint32_t fetch_leaves(uint32_t node_idx);
-	// hungarian algorithm to solve the min-assignment problem
-	void hungarian(const float mat[8][8], uint32_t n, uint32_t order[8]);
-	void create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx);
-
-public:
-	WideBVHBuilder(WideBVH *wbvh, const SBVH &sbvh) : m_wbvh(wbvh), m_sbvh(sbvh), m_config(wbvh->m_config) {
-		m_wbvh->m_nodes.clear();
-		m_wbvh->m_tri_indices.clear();
-	}
-	void Run();
-};
-
-std::shared_ptr<WideBVH> WideBVH::Build(const std::shared_ptr<SBVH> &sbvh) {
-	std::shared_ptr<WideBVH> ret = std::make_shared<WideBVH>();
-	ret->m_scene_ptr = sbvh->GetScenePtr();
-	ret->m_config = sbvh->GetConfig();
-	WideBVHBuilder builder{ret.get(), *sbvh};
-	builder.Run();
-	return ret;
-}
-
-void WideBVHBuilder::Run() {
-	m_costs.resize(m_sbvh.GetNodes().size());
+template <class BVHType> void WideBVHBuilder<BVHType>::Run() {
+	m_costs.resize(m_bin_bvh.GetNodeCount());
 	calculate_cost(0);
 	spdlog::info("WideBVH cost analyzed");
 
-	m_wbvh->m_nodes.emplace_back();
-	m_wbvh->m_tri_indices.reserve((size_t)m_sbvh.GetLeafCount());
+	m_p_wbvh->m_nodes.emplace_back();
+	m_p_wbvh->m_tri_indices.reserve((size_t)m_bin_bvh.GetLeafCount());
 	create_nodes(0, 0);
-	spdlog::info("WideBVH built with {} nodes", m_wbvh->m_nodes.size());
+	spdlog::info("WideBVH built with {} nodes", m_p_wbvh->m_nodes.size());
 
-	m_wbvh->m_nodes.shrink_to_fit();
+	m_p_wbvh->m_nodes.shrink_to_fit();
 	m_costs.clear();
 	m_costs.shrink_to_fit();
 }
 
-uint32_t WideBVHBuilder::calculate_cost(uint32_t node_idx) {
-	float area = m_sbvh.GetBox(node_idx).GetArea();
+template <class BVHType>
+WideBVHBuilder<BVHType>::WideBVHBuilder(WideBVH *p_wbvh, const BinaryBVHBase<BVHType> &bin_bvh)
+    : m_p_wbvh(p_wbvh), m_bin_bvh(bin_bvh), m_config(bin_bvh.GetConfig()) {
+	m_p_wbvh->m_nodes.clear();
+	m_p_wbvh->m_tri_indices.clear();
+}
+
+template <class BVHType> uint32_t WideBVHBuilder<BVHType>::calculate_cost(uint32_t node_idx) {
+	float area = m_bin_bvh.GetBox(node_idx).GetArea();
 	// is leaf, then initialize
-	if (m_sbvh.IsLeaf(node_idx)) {
+	if (m_bin_bvh.IsLeaf(node_idx)) {
 		for (uint32_t i = 1; i <= 7; ++i) {
 			m_costs[node_idx][i].m_sah = m_config.GetTriangleCost() * area;
 			m_costs[node_idx][i].m_type = NodeCost::kLeaf;
@@ -74,7 +33,7 @@ uint32_t WideBVHBuilder::calculate_cost(uint32_t node_idx) {
 		return 1;
 	}
 
-	uint32_t lidx = m_sbvh.GetLeft(node_idx), ridx = m_sbvh.GetRight(node_idx);
+	uint32_t lidx = m_bin_bvh.GetLeft(node_idx), ridx = m_bin_bvh.GetRight(node_idx);
 	uint32_t tri_count = calculate_cost(ridx) + calculate_cost(lidx);
 
 	auto &dp = m_costs[node_idx];
@@ -122,8 +81,10 @@ uint32_t WideBVHBuilder::calculate_cost(uint32_t node_idx) {
 	return tri_count;
 }
 
-void WideBVHBuilder::fetch_children(uint32_t node_idx, uint32_t i, uint32_t *out_cnt, uint32_t out_node_idx[8]) {
-	uint32_t cidx[2] = {m_sbvh.GetLeft(node_idx), m_sbvh.GetRight(node_idx)};
+template <class BVHType>
+void WideBVHBuilder<BVHType>::fetch_children(uint32_t node_idx, uint32_t i, uint32_t *out_cnt,
+                                             uint32_t out_node_idx[8]) {
+	uint32_t cidx[2] = {m_bin_bvh.GetLeft(node_idx), m_bin_bvh.GetRight(node_idx)};
 	uint32_t cdis[2] = {m_costs[node_idx][i].m_distribute[0], m_costs[node_idx][i].m_distribute[1]};
 	for (uint32_t c = 0; c < 2; ++c) {
 		const auto &info = m_costs[cidx[c]][cdis[c]];
@@ -134,15 +95,15 @@ void WideBVHBuilder::fetch_children(uint32_t node_idx, uint32_t i, uint32_t *out
 	}
 }
 
-uint32_t WideBVHBuilder::fetch_leaves(uint32_t node_idx) {
-	if (m_sbvh.IsLeaf(node_idx)) {
-		m_wbvh->m_tri_indices.push_back(m_sbvh.GetTriIdx(node_idx));
+template <class BVHType> uint32_t WideBVHBuilder<BVHType>::fetch_leaves(uint32_t node_idx) {
+	if (m_bin_bvh.IsLeaf(node_idx)) {
+		m_p_wbvh->m_tri_indices.push_back(m_bin_bvh.GetTriangleIdx(node_idx));
 		return 1;
 	}
-	return fetch_leaves(m_sbvh.GetRight(node_idx)) + fetch_leaves(m_sbvh.GetLeft(node_idx));
+	return fetch_leaves(m_bin_bvh.GetRight(node_idx)) + fetch_leaves(m_bin_bvh.GetLeft(node_idx));
 }
 
-void WideBVHBuilder::hungarian(const float mat[8][8], uint32_t n, uint32_t order[8]) {
+template <class BVHType> void WideBVHBuilder<BVHType>::hungarian(const float mat[8][8], uint32_t n, uint32_t order[8]) {
 #define INF 1e12f
 	static uint32_t p[9], way[9];
 	static float u[9], v[9], minv[9];
@@ -190,13 +151,13 @@ void WideBVHBuilder::hungarian(const float mat[8][8], uint32_t n, uint32_t order
 #undef INF
 }
 
-void WideBVHBuilder::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx) {
-#define CUR (m_wbvh->m_nodes[wbvh_node_idx])
+template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx) {
+#define CUR (m_p_wbvh->m_nodes[wbvh_node_idx])
 
 	uint32_t ch_idx_arr[8], ch_cnt = 0;
 	fetch_children(sbvh_node_idx, 1, &ch_cnt, ch_idx_arr);
 
-	const AABB &cur_box = m_sbvh.GetBox(sbvh_node_idx);
+	const AABB &cur_box = m_bin_bvh.GetBox(sbvh_node_idx);
 	glm::vec3 cell; // cell size
 	{
 		// fetch lo position
@@ -224,7 +185,7 @@ void WideBVHBuilder::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx
 		glm::vec3 dist;
 		for (uint32_t i = 0; i < ch_cnt; ++i)
 			for (uint32_t j = 0; j < 8; ++j) {
-				dist = m_sbvh.GetBox(ch_idx_arr[i]).GetCenter() - m_sbvh.GetBox(sbvh_node_idx).GetCenter();
+				dist = m_bin_bvh.GetBox(ch_idx_arr[i]).GetCenter() - m_bin_bvh.GetBox(sbvh_node_idx).GetCenter();
 				ch_cost_mat[i][j] = ((j & 1u) ? -dist.x : dist.x) + ((j & 2u) ? -dist.y : dist.y) +
 				                    ((j & 4u) ? -dist.z : dist.z); // project to diagonal ray
 			}
@@ -238,14 +199,14 @@ void WideBVHBuilder::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx
 
 	// set values
 	CUR.m_imask = 0;
-	CUR.m_child_idx_base = (uint32_t)m_wbvh->m_nodes.size();
-	CUR.m_tri_idx_base = (uint32_t)m_wbvh->m_tri_indices.size();
+	CUR.m_child_idx_base = (uint32_t)m_p_wbvh->m_nodes.size();
+	CUR.m_tri_idx_base = (uint32_t)m_p_wbvh->m_tri_indices.size();
 
 	for (uint32_t i = 0; i < 8; ++i) {
 		uint32_t sidx = ch_ranked_idx_arr[i];
 		if (~sidx) {
-			glm::uvec3 qlow = glm::floor((m_sbvh.GetBox(sidx).m_min - cur_box.m_min) / cell);
-			glm::uvec3 qhigh = glm::ceil((m_sbvh.GetBox(sidx).m_max - cur_box.m_min) / cell);
+			glm::uvec3 qlow = glm::floor((m_bin_bvh.GetBox(sidx).m_min - cur_box.m_min) / cell);
+			glm::uvec3 qhigh = glm::ceil((m_bin_bvh.GetBox(sidx).m_max - cur_box.m_min) / cell);
 			// TODO: cast NaN to uint ?
 			qlow = glm::min(qlow, glm::uvec3(UINT8_MAX));
 			qhigh = glm::min(qhigh, glm::uvec3(UINT8_MAX));
@@ -260,14 +221,14 @@ void WideBVHBuilder::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx
 			CUR.m_qhiz[i] = (uint8_t)qhigh.z;
 
 			if (m_costs[sidx][1].m_type == NodeCost::kLeaf) {
-				uint32_t tidx = m_wbvh->m_tri_indices.size() - CUR.m_tri_idx_base;
+				uint32_t tidx = m_p_wbvh->m_tri_indices.size() - CUR.m_tri_idx_base;
 				uint32_t tri_cnt = fetch_leaves(sidx);
 				// bbbindex
 				constexpr uint32_t kLeafMetaMap[4] = {0u, 0b00100000u, 0b01100000u, 0b11100000u};
 				CUR.m_meta[i] = kLeafMetaMap[tri_cnt] | tidx;
 			} else if (m_costs[sidx][1].m_type == NodeCost::kInternal) {
-				uint32_t widx = m_wbvh->m_nodes.size() - CUR.m_child_idx_base;
-				m_wbvh->m_nodes.emplace_back();
+				uint32_t widx = m_p_wbvh->m_nodes.size() - CUR.m_child_idx_base;
+				m_p_wbvh->m_nodes.emplace_back();
 				// 001index
 				CUR.m_meta[i] = (1 << 5u) | (widx + 24u);
 				// mark as internal
@@ -282,3 +243,5 @@ void WideBVHBuilder::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx
 			create_nodes(CUR.m_child_idx_base + (CUR.m_meta[ch_slot_arr[i]] & 0x1fu) - 24u, ch_idx_arr[i]);
 #undef CUR
 }
+
+} // namespace wide_bvh_detail

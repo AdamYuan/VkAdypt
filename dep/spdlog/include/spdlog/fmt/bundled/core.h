@@ -816,7 +816,7 @@ class iterator_buffer<std::back_insert_iterator<Container>,
 
  protected:
   void grow(size_t capacity) final FMT_OVERRIDE {
-    container_.resize(capacity);
+	  container_.resize(0, 0);
     this->set(&container_[0], capacity);
   }
 

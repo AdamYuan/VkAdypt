@@ -114,8 +114,7 @@ void AcceleratedScene::load_textures(const std::shared_ptr<myvk::Queue> &graphic
 	std::atomic_uint32_t texture_id{0};
 	while (cores--) {
 		future_vector.push_back(std::async([&]() -> void {
-			std::shared_ptr<myvk::CommandPool> command_pool =
-			    myvk::CommandPool::Create(graphics_queue, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+			std::shared_ptr<myvk::CommandPool> command_pool = myvk::CommandPool::Create(graphics_queue);
 			myvk::ObjectTracker tracker;
 			while (true) {
 				uint32_t i = texture_id++;
@@ -268,8 +267,8 @@ void AcceleratedScene::create_bvh_buffers(const std::shared_ptr<myvk::Queue> &gr
 	    bvh_tri_matrices_staging_buffer;
 
 	{ // create bvh_nodes_staging_buffer
-		const std::vector<WideBVHNode> &nodes = widebvh->GetNodes();
-		bvh_nodes_staging_buffer = myvk::Buffer::CreateStaging(device, nodes.size() * sizeof(WideBVHNode));
+		const std::vector<WideBVH::Node> &nodes = widebvh->GetNodes();
+		bvh_nodes_staging_buffer = myvk::Buffer::CreateStaging(device, nodes.size() * sizeof(WideBVH::Node));
 		bvh_nodes_staging_buffer->UpdateData(nodes.data(), nodes.data() + nodes.size());
 	}
 

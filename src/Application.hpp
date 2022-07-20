@@ -29,7 +29,6 @@ private:
 	// frame objects
 	myvk::FrameManager m_frame_manager;
 	std::vector<std::shared_ptr<myvk::Framebuffer>> m_framebuffers;
-	std::vector<std::shared_ptr<myvk::CommandBuffer>> m_frame_command_buffers;
 
 	// render pass
 	std::shared_ptr<myvk::RenderPass> m_render_pass;
@@ -50,7 +49,7 @@ private:
 	void initialize_vulkan();
 	void create_render_pass();
 	void create_framebuffers();
-	void resize();
+	void resize(uint32_t w, uint32_t h);
 	void draw_frame();
 
 	static void glfw_key_callback(GLFWwindow *window, int key, int scancode, int action, int mods);

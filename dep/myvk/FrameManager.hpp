@@ -22,8 +22,9 @@ private:
 	std::vector<Fence *> m_image_fences;
 	std::vector<std::shared_ptr<Fence>> m_frame_fences;
 	std::vector<std::shared_ptr<Semaphore>> m_render_done_semaphores, m_acquire_done_semaphores;
+	std::vector<std::shared_ptr<myvk::CommandBuffer>> m_frame_command_buffers;
 
-	std::function<void()> m_resize_func;
+	std::function<void(uint32_t, uint32_t)> m_resize_func;
 
 	void recreate_swapchain();
 
@@ -31,17 +32,19 @@ public:
 	void Initialize(const std::shared_ptr<Queue> &graphics_queue, const std::shared_ptr<PresentQueue> &present_queue,
 	                bool use_vsync, uint32_t frame_count = 3);
 
-	void SetResizeFunc(const std::function<void()> &resize_func) { m_resize_func = resize_func; }
-
+	void SetResizeFunc(const std::function<void(uint32_t, uint32_t)> &resize_func) { m_resize_func = resize_func; }
 	void Resize() { m_resized = true; }
 
-	bool AcquireNextImage();
+	bool NewFrame();
+	void Render();
 
-	void SubmitAndPresent(const std::shared_ptr<CommandBuffer> &command_buffer);
+	void WaitIdle() const;
 
 	uint32_t GetCurrentFrame() const { return m_current_frame; }
-
 	uint32_t GetCurrentImageIndex() const { return m_current_image_index; }
+	const std::shared_ptr<CommandBuffer> &GetCurrentCommandBuffer() const {
+		return m_frame_command_buffers[m_current_frame];
+	}
 
 	const std::shared_ptr<Swapchain> &GetSwapchain() const { return m_swapchain; }
 	const std::vector<std::shared_ptr<SwapchainImage>> &GetSwapchainImages() const { return m_swapchain_images; }

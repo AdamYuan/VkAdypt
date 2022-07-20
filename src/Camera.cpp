@@ -1,7 +1,6 @@
 #include "Camera.hpp"
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtx/string_cast.hpp>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
@@ -34,8 +33,8 @@ std::shared_ptr<Camera> Camera::Create(const std::shared_ptr<myvk::Device> &devi
 }
 
 void Camera::move_forward(float dist, float dir) {
-	m_position.x -= glm::sin(m_yaw + dir) * dist;
-	m_position.z -= glm::cos(m_yaw + dir) * dist;
+	m_position.x += glm::sin(m_yaw + dir) * dist;
+	m_position.z += glm::cos(m_yaw + dir) * dist;
 }
 
 void Camera::Control(GLFWwindow *window, float delta) {
@@ -60,8 +59,8 @@ void Camera::Control(GLFWwindow *window, float delta) {
 
 		if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)) {
 			glfwGetCursorPos(window, &cur_pos.x, &cur_pos.y);
-			float offset_x = float(cur_pos.x - m_last_mouse_pos.x) * m_sensitive;
-			float offset_y = float(cur_pos.y - m_last_mouse_pos.y) * m_sensitive;
+			float offset_x = float(cur_pos.x - m_last_mouse_pos.x) * m_sensitivity;
+			float offset_y = float(cur_pos.y - m_last_mouse_pos.y) * m_sensitivity;
 
 			m_yaw -= offset_x;
 			m_pitch -= offset_y;
@@ -75,13 +74,21 @@ void Camera::Control(GLFWwindow *window, float delta) {
 
 Camera::UniformData Camera::fetch_uniform_data() const {
 	UniformData data = {};
-	data.m_projection = glm::perspective(m_fov, m_aspect_ratio, kCamNear, kCamFar);
-	data.m_projection[1][1] *= -1;
-	data.m_inv_projection = glm::inverse(data.m_projection);
-	data.m_inv_view = glm::rotate(glm::identity<glm::mat4>(), -m_pitch, glm::vec3(1.0f, 0.0f, 0.0f));
-	data.m_inv_view = glm::rotate(data.m_inv_view, -m_yaw, glm::vec3(0.0f, 1.0f, 0.0f));
-	data.m_inv_view = glm::translate(data.m_inv_view, -m_position);
-	data.m_inv_view = glm::inverse(data.m_inv_view);
+	glm::mat4 trans = glm::identity<glm::mat4>();
+	trans = glm::rotate(trans, m_yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+	trans = glm::rotate(trans, m_pitch, glm::vec3(-1.0f, 0.0f, 0.0f));
+	float tg = glm::tan(m_fov * 0.5f);
+	glm::vec3 look = (trans * glm::vec4(0.0, 0.0, 1.0, 0.0));
+	glm::vec3 side = (trans * glm::vec4(1.0, 0.0, 0.0, 0.0));
+	look = glm::normalize(look);
+	side = glm::normalize(side) * tg * m_aspect_ratio;
+	glm::vec3 up = glm::normalize(glm::cross(look, side)) * tg;
+
+	data.m_position = glm::vec4(m_position, 1.0);
+	data.m_look = glm::vec4(look, 1.0);
+	data.m_side = glm::vec4(side, 1.0);
+	data.m_up = glm::vec4(up, 1.0);
+
 	return data;
 }
 

@@ -1,6 +1,7 @@
 #include "Application.hpp"
 
 #include "Config.hpp"
+#include "FlatSBVH.hpp"
 #include <spdlog/spdlog.h>
 
 #include <imgui/imgui.h>
@@ -117,25 +118,23 @@ void Application::create_framebuffers() {
 	}
 }
 
-void Application::resize() {
+void Application::resize(uint32_t w, uint32_t h) {
 	for (uint32_t i = 0; i < m_frame_manager.GetSwapchain()->GetImageCount(); ++i) {
 		m_framebuffers[i] = myvk::Framebuffer::Create(m_render_pass, m_frame_manager.GetSwapchainImageViews()[i]);
 	}
-	VkExtent2D extent = m_frame_manager.GetSwapchain()->GetExtent();
-	m_camera->m_aspect_ratio = extent.width / float(extent.height);
-	m_ray_tracer->Resize(extent.width, extent.height);
+	m_camera->m_aspect_ratio = w / float(h);
+	m_ray_tracer->Resize(w, h);
 }
 
 void Application::draw_frame() {
-	if (!m_frame_manager.AcquireNextImage())
+	if (!m_frame_manager.NewFrame())
 		return;
 
 	uint32_t image_index = m_frame_manager.GetCurrentImageIndex();
 	uint32_t current_frame = m_frame_manager.GetCurrentFrame();
 	m_camera->UpdateFrameUniformBuffer(current_frame);
-	const std::shared_ptr<myvk::CommandBuffer> &command_buffer = m_frame_command_buffers[current_frame];
+	const std::shared_ptr<myvk::CommandBuffer> &command_buffer = m_frame_manager.GetCurrentCommandBuffer();
 
-	command_buffer->Reset();
 	command_buffer->Begin();
 
 	command_buffer->CmdBeginRenderPass(m_render_pass, m_framebuffers[image_index], {{{0.0f, 0.0f, 0.0f, 1.0f}}});
@@ -145,7 +144,7 @@ void Application::draw_frame() {
 	command_buffer->CmdEndRenderPass();
 	command_buffer->End();
 
-	m_frame_manager.SubmitAndPresent(command_buffer);
+	m_frame_manager.Render();
 }
 
 void Application::initialize_vulkan() {
@@ -272,11 +271,8 @@ void Application::initialize_vulkan() {
 		spdlog::warn("Async path tracing queue not available, the main thread might be blocked when path tracing");
 	}
 
-	m_main_command_pool = myvk::CommandPool::Create(m_main_queue, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
-	m_path_tracer_command_pool =
-	    myvk::CommandPool::Create(m_path_tracer_queue, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
-
-	m_frame_command_buffers = myvk::CommandBuffer::CreateMultiple(m_main_command_pool, kFrameCount);
+	m_main_command_pool = myvk::CommandPool::Create(m_main_queue);
+	m_path_tracer_command_pool = myvk::CommandPool::Create(m_path_tracer_queue);
 }
 
 Application::Application() {
@@ -292,7 +288,7 @@ Application::Application() {
 	create_window();
 	initialize_vulkan();
 	m_frame_manager.Initialize(m_main_queue, m_present_queue, false, kFrameCount);
-	m_frame_manager.SetResizeFunc([&]() { resize(); });
+	m_frame_manager.SetResizeFunc([&](uint32_t w, uint32_t h) { resize(w, h); });
 
 	glfwSetWindowTitle(
 	    m_window,
@@ -313,7 +309,7 @@ Application::~Application() {
 void Application::Load(const char *filename) {
 	BVHConfig bvh_config = {};
 	std::shared_ptr<Scene> scene = Scene::CreateFromFile(filename);
-	std::shared_ptr<SBVH> sbvh = SBVH::Build(bvh_config, scene);
+	std::shared_ptr<BinaryBVHBase<FlatSBVH>> sbvh = FlatSBVH::Build(bvh_config, scene);
 	std::shared_ptr<WideBVH> widebvh = WideBVH::Build(sbvh);
 	widebvh->SaveToFile("a.bvh");
 	m_accelerated_scene = AcceleratedScene::Create(m_loader_queue, widebvh);
@@ -343,6 +339,7 @@ void Application::Run() {
 		draw_frame();
 		lst_time = cur_time;
 	}
+	m_frame_manager.WaitIdle();
 	m_device->WaitIdle();
 }
 

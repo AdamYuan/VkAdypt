@@ -37,9 +37,9 @@ private:
 	std::shared_ptr<myvk::DescriptorSetLayout> m_descriptor_set_layout;
 	std::shared_ptr<myvk::DescriptorSet> m_descriptor_set;
 
-	std::vector<glm::vec4> generate_bvh_tri_matrices(const std::shared_ptr<WideBVH> &widebvh);
-	std::vector<Material> generate_tri_materials(const std::shared_ptr<Scene> &scene,
-	                                             std::unordered_map<std::string, uint32_t> *texture_name_map);
+	static std::vector<glm::vec4> generate_bvh_tri_matrices(const std::shared_ptr<WideBVH> &widebvh);
+	static std::vector<Material> generate_tri_materials(const std::shared_ptr<Scene> &scene,
+	                                                    std::unordered_map<std::string, uint32_t> *texture_name_map);
 
 	void load_textures(const std::shared_ptr<myvk::Queue> &graphics_queue, const std::string &base_dir,
 	                   const std::unordered_map<std::string, uint32_t> &texture_name_map);

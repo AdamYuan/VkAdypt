@@ -37,22 +37,24 @@ void FrameManager::Initialize(const std::shared_ptr<Queue> &graphics_queue,
 	m_frame_fences.resize(frame_count);
 	m_render_done_semaphores.resize(frame_count);
 	m_acquire_done_semaphores.resize(frame_count);
+	m_frame_command_buffers.resize(frame_count);
 
 	for (uint32_t i = 0; i < frame_count; ++i) {
 		m_frame_fences[i] = Fence::Create(m_swapchain->GetDevicePtr(), VK_FENCE_CREATE_SIGNALED_BIT);
 		m_render_done_semaphores[i] = Semaphore::Create(m_swapchain->GetDevicePtr());
 		m_acquire_done_semaphores[i] = Semaphore::Create(m_swapchain->GetDevicePtr());
+		m_frame_command_buffers[i] = myvk::CommandBuffer::Create(myvk::CommandPool::Create(graphics_queue));
 	}
 }
 
-bool FrameManager::AcquireNextImage() {
+bool FrameManager::NewFrame() {
 	m_frame_fences[m_current_frame]->Wait();
 
 	VkResult result =
 	    m_swapchain->AcquireNextImage(&m_current_image_index, m_acquire_done_semaphores[m_current_frame], nullptr);
 	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 		recreate_swapchain();
-		m_resize_func();
+		m_resize_func(m_swapchain->GetExtent().width, m_swapchain->GetExtent().height);
 		return false;
 	} else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
 		// throw std::runtime_error("failed to acquire swap chain image!");
@@ -63,21 +65,30 @@ bool FrameManager::AcquireNextImage() {
 		m_image_fences[m_current_image_index]->Wait();
 	m_image_fences[m_current_image_index] = m_frame_fences[m_current_frame].get();
 
+	// reset frame command buffer
+	m_frame_command_buffers[m_current_frame]->GetCommandPoolPtr()->Reset();
+
 	return true;
 }
 
-void FrameManager::SubmitAndPresent(const std::shared_ptr<CommandBuffer> &command_buffer) {
+void FrameManager::Render() {
 	m_frame_fences[m_current_frame]->Reset();
-	command_buffer->Submit(
+	m_frame_command_buffers[m_current_frame]->Submit(
 	    {{m_acquire_done_semaphores[m_current_frame], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}},
 	    {m_render_done_semaphores[m_current_frame]}, m_frame_fences[m_current_frame]);
 	VkResult result = m_swapchain->Present(m_current_image_index, {m_render_done_semaphores[m_current_frame]});
 	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_resized) {
 		m_resized = false;
 		recreate_swapchain();
-		m_resize_func();
+		m_resize_func(m_swapchain->GetExtent().width, m_swapchain->GetExtent().height);
 	}
 
 	m_current_frame = (m_current_frame + 1u) % m_frame_count;
 }
+
+void FrameManager::WaitIdle() const {
+	for (const auto &i : m_frame_fences)
+		i->Wait();
+}
+
 } // namespace myvk

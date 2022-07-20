@@ -1,5 +1,7 @@
 #include "ImGuiRenderer.hpp"
-#include <myvk/ShaderModule.hpp>
+#include "myvk/Buffer.hpp"
+#include "myvk/CommandBuffer.hpp"
+#include "myvk/ShaderModule.hpp"
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
@@ -74,6 +76,8 @@ void ImGuiRenderer::create_descriptor(const std::shared_ptr<myvk::Device> &devic
 		layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		layout_binding.descriptorCount = 1;
 		layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		VkSampler immutable_samplers[] = {m_font_texture_sampler->GetHandle()};
+		layout_binding.pImmutableSamplers = immutable_samplers;
 
 		m_descriptor_set_layout = myvk::DescriptorSetLayout::Create(device, {layout_binding});
 	}
@@ -231,8 +235,8 @@ void ImGuiRenderer::create_pipeline(const std::shared_ptr<myvk::RenderPass> &ren
 		color_blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
 		color_blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 		color_blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-		color_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-		color_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		color_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		color_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 		color_blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
 		color_blend_attachment.colorWriteMask =
 		    VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
