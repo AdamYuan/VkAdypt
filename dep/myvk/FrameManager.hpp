@@ -11,7 +11,7 @@
 #include <functional>
 
 namespace myvk {
-class FrameManager {
+class FrameManager : public DeviceObjectBase {
 private:
 	bool m_resized{false};
 	uint32_t m_current_frame{0}, m_current_image_index, m_frame_count;
@@ -24,15 +24,24 @@ private:
 	std::vector<std::shared_ptr<Semaphore>> m_render_done_semaphores, m_acquire_done_semaphores;
 	std::vector<std::shared_ptr<myvk::CommandBuffer>> m_frame_command_buffers;
 
-	std::function<void(uint32_t, uint32_t)> m_resize_func;
+	std::function<void(const FrameManager &)> m_resize_func;
 
+	void initialize(const std::shared_ptr<Queue> &graphics_queue, const std::shared_ptr<PresentQueue> &present_queue,
+	                bool use_vsync, uint32_t frame_count = 3,
+	                VkImageUsageFlags image_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 	void recreate_swapchain();
 
 public:
-	void Initialize(const std::shared_ptr<Queue> &graphics_queue, const std::shared_ptr<PresentQueue> &present_queue,
-	                bool use_vsync, uint32_t frame_count = 3);
+	static std::shared_ptr<FrameManager> Create(const std::shared_ptr<Queue> &graphics_queue,
+	                                            const std::shared_ptr<PresentQueue> &present_queue, bool use_vsync,
+	                                            uint32_t frame_count = 3,
+	                                            VkImageUsageFlags image_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 
-	void SetResizeFunc(const std::function<void(uint32_t, uint32_t)> &resize_func) { m_resize_func = resize_func; }
+	~FrameManager() override = default;
+
+	inline const std::shared_ptr<myvk::Device> &GetDevicePtr() const override { return m_swapchain->GetDevicePtr(); }
+
+	void SetResizeFunc(const std::function<void(const FrameManager &)> &resize_func) { m_resize_func = resize_func; }
 	void Resize() { m_resized = true; }
 
 	bool NewFrame();
@@ -49,6 +58,17 @@ public:
 	const std::shared_ptr<Swapchain> &GetSwapchain() const { return m_swapchain; }
 	const std::vector<std::shared_ptr<SwapchainImage>> &GetSwapchainImages() const { return m_swapchain_images; }
 	const std::vector<std::shared_ptr<ImageView>> &GetSwapchainImageViews() const { return m_swapchain_image_views; }
+
+	const std::shared_ptr<SwapchainImage> &GetCurrentSwapchainImage() const {
+		return m_swapchain_images[m_current_image_index];
+	}
+	const std::shared_ptr<ImageView> &GetCurrentSwapchainImageView() const {
+		return m_swapchain_image_views[m_current_image_index];
+	}
+
+	VkExtent2D GetExtent() const { return m_swapchain->GetExtent(); }
+
+	void CmdPipelineSetScreenSize(const std::shared_ptr<myvk::CommandBuffer> &command_buffer) const;
 };
 } // namespace myvk
 

@@ -1,16 +1,17 @@
-#ifndef IMGUI_RENDERER_HPP
-#define IMGUI_RENDERER_HPP
+#ifndef MYVK_IMGUI_RENDERER_HPP
+#define MYVK_IMGUI_RENDERER_HPP
 
-#include "myvk/Buffer.hpp"
-#include "myvk/CommandBuffer.hpp"
-#include "myvk/CommandPool.hpp"
-#include "myvk/DescriptorPool.hpp"
-#include "myvk/DescriptorSet.hpp"
-#include "myvk/GraphicsPipeline.hpp"
-#include "myvk/Image.hpp"
-#include "myvk/ImageView.hpp"
-#include "myvk/Sampler.hpp"
+#include "Buffer.hpp"
+#include "CommandBuffer.hpp"
+#include "CommandPool.hpp"
+#include "DescriptorPool.hpp"
+#include "DescriptorSet.hpp"
+#include "GraphicsPipeline.hpp"
+#include "Image.hpp"
+#include "ImageView.hpp"
+#include "Sampler.hpp"
 
+namespace myvk {
 class ImGuiRenderer {
 private:
 	std::shared_ptr<myvk::Image> m_font_texture;
@@ -24,7 +25,7 @@ private:
 	std::shared_ptr<myvk::PipelineLayout> m_pipeline_layout;
 	std::shared_ptr<myvk::GraphicsPipeline> m_pipeline;
 
-	std::vector<std::shared_ptr<myvk::Buffer>> m_vertex_buffers, m_index_buffers;
+	mutable std::vector<std::shared_ptr<myvk::Buffer>> m_vertex_buffers, m_index_buffers;
 
 	void create_font_texture(const std::shared_ptr<myvk::CommandPool> &graphics_command_pool);
 
@@ -39,7 +40,8 @@ public:
 	void Initialize(const std::shared_ptr<myvk::CommandPool> &command_pool,
 	                const std::shared_ptr<myvk::RenderPass> &render_pass, uint32_t subpass, uint32_t frame_count);
 
-	void CmdDrawPipeline(const std::shared_ptr<myvk::CommandBuffer> &command_buffer, uint32_t current_frame);
+	void CmdDrawPipeline(const std::shared_ptr<myvk::CommandBuffer> &command_buffer, uint32_t current_frame) const;
 };
+} // namespace myvk
 
 #endif

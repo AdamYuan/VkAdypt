@@ -8,6 +8,7 @@ set(SHADER_SRC
 
 set(SHADER_HEADER
         accelerated_scene.glsl
+        camera.glsl
         )
 list(TRANSFORM SHADER_HEADER PREPEND ${CMAKE_CURRENT_LIST_DIR}/)
 

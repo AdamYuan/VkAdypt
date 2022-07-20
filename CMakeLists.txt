@@ -28,8 +28,6 @@ add_executable(Adypt
         src/main.cpp
         src/Application.hpp
         src/Application.cpp
-        src/ImGuiRenderer.hpp
-        src/ImGuiRenderer.cpp
         src/Camera.hpp
         src/Camera.cpp
         src/Config.hpp

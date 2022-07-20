@@ -5,18 +5,19 @@
 
 namespace myvk {
 std::shared_ptr<Buffer> Buffer::Create(const std::shared_ptr<Device> &device, VkDeviceSize size,
-                                       VmaMemoryUsage memory_usage, VkBufferUsageFlags buffer_usage,
+                                       VmaAllocationCreateFlags allocation_flags, VkBufferUsageFlags buffer_usage,
+                                       VmaMemoryUsage memory_usage,
                                        const std::vector<std::shared_ptr<Queue>> &access_queues) {
 	VkBufferCreateInfo create_info = {};
 	create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 	create_info.size = size;
 	create_info.usage = buffer_usage;
 
-	return Create(device, create_info, memory_usage, access_queues);
+	return Create(device, create_info, allocation_flags, memory_usage, access_queues);
 }
 
 std::shared_ptr<Buffer> Buffer::Create(const std::shared_ptr<Device> &device, const VkBufferCreateInfo &create_info,
-                                       VmaMemoryUsage memory_usage,
+                                       VmaAllocationCreateFlags allocation_flags, VmaMemoryUsage memory_usage,
                                        const std::vector<std::shared_ptr<Queue>> &access_queues) {
 	std::shared_ptr<Buffer> ret = std::make_shared<Buffer>();
 	ret->m_device_ptr = device;
@@ -38,17 +39,16 @@ std::shared_ptr<Buffer> Buffer::Create(const std::shared_ptr<Device> &device, co
 
 	VmaAllocationCreateInfo alloc_create_info = {};
 	alloc_create_info.usage = memory_usage;
+	alloc_create_info.flags = allocation_flags;
+
+	VmaAllocationInfo allocation_info;
 
 	if (vmaCreateBuffer(device->GetAllocatorHandle(), &new_info, &alloc_create_info, &ret->m_buffer, &ret->m_allocation,
-	                    nullptr) != VK_SUCCESS)
+	                    &allocation_info) != VK_SUCCESS)
 		return nullptr;
+	ret->m_mapped_ptr = allocation_info.pMappedData;
 
 	return ret;
-}
-
-std::shared_ptr<Buffer> Buffer::CreateStaging(const std::shared_ptr<Device> &device, VkDeviceSize size,
-                                              const std::vector<std::shared_ptr<Queue>> &access_queues) {
-	return Create(device, size, VMA_MEMORY_USAGE_CPU_ONLY, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, access_queues);
 }
 
 void *Buffer::Map() const {

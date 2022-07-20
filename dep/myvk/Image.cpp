@@ -11,12 +11,13 @@ static inline uint32_t simple_ctz(uint32_t x) {
 }
 
 namespace myvk {
-std::shared_ptr<Image> Image::Create(const std::shared_ptr<Device> &device, VmaMemoryUsage memory_usage,
-                                     const VkImageCreateInfo &create_info,
+std::shared_ptr<Image> Image::Create(const std::shared_ptr<Device> &device, const VkImageCreateInfo &create_info,
+                                     VmaAllocationCreateFlags allocation_flags, VmaMemoryUsage memory_usage,
                                      const std::vector<std::shared_ptr<Queue>> &access_queues) {
 	std::shared_ptr<Image> ret = std::make_shared<Image>();
 	ret->m_device_ptr = device;
 
+	ret->m_usage = create_info.usage;
 	ret->m_extent = create_info.extent;
 	ret->m_type = create_info.imageType;
 	ret->m_format = create_info.format;
@@ -38,6 +39,7 @@ std::shared_ptr<Image> Image::Create(const std::shared_ptr<Device> &device, VmaM
 	}
 
 	VmaAllocationCreateInfo alloc_info = {};
+	alloc_info.flags = allocation_flags;
 	alloc_info.usage = memory_usage;
 
 	if (vmaCreateImage(device->GetAllocatorHandle(), &new_info, &alloc_info, &ret->m_image, &ret->m_allocation,
@@ -61,7 +63,44 @@ std::shared_ptr<Image> Image::CreateTexture2D(const std::shared_ptr<Device> &dev
 	create_info.usage = usage;
 	create_info.samples = VK_SAMPLE_COUNT_1_BIT;
 
-	return Create(device, VMA_MEMORY_USAGE_GPU_ONLY, create_info, access_queue);
+	return Create(device, create_info, 0, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, access_queue);
+}
+
+std::shared_ptr<Image> Image::CreateTexture3D(const std::shared_ptr<Device> &device, const VkExtent3D &size,
+                                              uint32_t mip_level, VkFormat format, VkImageUsageFlags usage,
+                                              const std::vector<std::shared_ptr<Queue>> &access_queue) {
+	VkImageCreateInfo create_info = {};
+	create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	create_info.imageType = VK_IMAGE_TYPE_3D;
+	create_info.extent = size;
+	create_info.mipLevels = mip_level;
+	create_info.arrayLayers = 1;
+	create_info.format = format;
+	create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+	create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	create_info.usage = usage;
+	create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+
+	return Create(device, create_info, 0, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, access_queue);
+}
+
+std::shared_ptr<Image> Image::CreateTexture2DArray(const std::shared_ptr<Device> &device, const VkExtent2D &size,
+                                                   uint32_t array_layer, uint32_t mip_level, VkFormat format,
+                                                   VkImageUsageFlags usage,
+                                                   const std::vector<std::shared_ptr<Queue>> &access_queue) {
+	VkImageCreateInfo create_info = {};
+	create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	create_info.imageType = VK_IMAGE_TYPE_2D;
+	create_info.extent = {size.width, size.height, 1};
+	create_info.mipLevels = mip_level;
+	create_info.arrayLayers = array_layer;
+	create_info.format = format;
+	create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+	create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	create_info.usage = usage;
+	create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+
+	return Create(device, create_info, 0, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, access_queue);
 }
 
 uint32_t Image::QueryMipLevel(uint32_t w) { return simple_ctz(w); }

@@ -95,10 +95,32 @@ VkResult CommandBuffer::Begin(VkCommandBufferUsageFlags usage) const {
 	return vkBeginCommandBuffer(m_command_buffer, &begin_info);
 }
 
+VkResult CommandBuffer::BeginSecondary(VkCommandBufferUsageFlags usage) const {
+	VkCommandBufferBeginInfo begin_info = {};
+	begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	begin_info.flags = usage;
+
+	VkCommandBufferInheritanceInfo inheritance_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+	begin_info.pInheritanceInfo = &inheritance_info;
+
+	return vkBeginCommandBuffer(m_command_buffer, &begin_info);
+}
+
 VkResult CommandBuffer::End() const { return vkEndCommandBuffer(m_command_buffer); }
 
 VkResult CommandBuffer::Reset(VkCommandBufferResetFlags flags) const {
 	return vkResetCommandBuffer(m_command_buffer, flags);
+}
+
+void CommandBuffer::CmdExecuteCommands(const std::vector<std::shared_ptr<CommandBuffer>> &command_buffers) const {
+	std::vector<VkCommandBuffer> handles(command_buffers.size());
+	for (uint32_t i = 0; i < handles.size(); ++i)
+		handles[i] = command_buffers[i]->GetHandle();
+	vkCmdExecuteCommands(m_command_buffer, handles.size(), handles.data());
+}
+void CommandBuffer::CmdExecuteCommand(const std::shared_ptr<CommandBuffer> &command_buffer) const {
+	VkCommandBuffer handle = command_buffer->GetHandle();
+	vkCmdExecuteCommands(m_command_buffer, 1, &handle);
 }
 
 void CommandBuffer::CmdBeginRenderPass(const std::shared_ptr<RenderPass> &render_pass,
@@ -129,6 +151,33 @@ void CommandBuffer::CmdBeginRenderPass(const std::shared_ptr<RenderPass> &render
 	render_begin_info.renderArea.extent = framebuffer->GetExtent();
 	render_begin_info.clearValueCount = clear_values.size();
 	render_begin_info.pClearValues = clear_values.data();
+
+	vkCmdBeginRenderPass(m_command_buffer, &render_begin_info, subpass_contents);
+}
+
+void CommandBuffer::CmdBeginRenderPass(const std::shared_ptr<RenderPass> &render_pass,
+                                       const std::shared_ptr<ImagelessFramebuffer> &framebuffer,
+                                       const std::vector<std::shared_ptr<ImageView>> &attachments,
+                                       const std::vector<VkClearValue> &clear_values,
+                                       VkSubpassContents subpass_contents) const {
+	std::vector<VkImageView> attachment_handles(attachments.size());
+	for (size_t i = 0; i < attachments.size(); ++i)
+		attachment_handles[i] = attachments[i]->GetHandle();
+
+	VkRenderPassAttachmentBeginInfo attachment_begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO};
+	attachment_begin_info.attachmentCount = attachment_handles.size();
+	attachment_begin_info.pAttachments = attachment_handles.data();
+
+	VkRenderPassBeginInfo render_begin_info = {};
+	render_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	render_begin_info.renderPass = render_pass->GetHandle();
+	render_begin_info.framebuffer = framebuffer->GetHandle();
+	render_begin_info.renderArea.offset = {0, 0};
+	render_begin_info.renderArea.extent = framebuffer->GetExtent();
+	render_begin_info.clearValueCount = clear_values.size();
+	render_begin_info.pClearValues = clear_values.data();
+
+	render_begin_info.pNext = &attachment_begin_info;
 
 	vkCmdBeginRenderPass(m_command_buffer, &render_begin_info, subpass_contents);
 }
@@ -180,14 +229,43 @@ void CommandBuffer::CmdCopy(const std::shared_ptr<ImageBase> &src, const std::sh
 	                       regions.data());
 }
 
+void CommandBuffer::CmdCopy(const std::shared_ptr<ImageBase> &src, const std::shared_ptr<ImageBase> &dst,
+                            const std::vector<VkImageCopy> &regions, VkImageLayout src_layout,
+                            VkImageLayout dst_layout) const {
+	vkCmdCopyImage(m_command_buffer, src->GetHandle(), src_layout, dst->GetHandle(), dst_layout, regions.size(),
+	               regions.data());
+}
+
 void CommandBuffer::CmdDraw(uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex,
                             uint32_t first_instance) const {
 	vkCmdDraw(m_command_buffer, vertex_count, instance_count, first_vertex, first_instance);
 }
+void CommandBuffer::CmdDrawIndirect(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset, uint32_t draw_count,
+                                    uint32_t stride) const {
+	vkCmdDrawIndirect(m_command_buffer, buffer->GetHandle(), offset, draw_count, stride);
+}
+void CommandBuffer::CmdDrawIndirectCount(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset,
+                                         const std::shared_ptr<BufferBase> &count_buffer,
+                                         VkDeviceSize count_buffer_offset, uint32_t max_draw_count,
+                                         uint32_t stride) const {
+	vkCmdDrawIndirectCount(m_command_buffer, buffer->GetHandle(), offset, count_buffer->GetHandle(),
+	                       count_buffer_offset, max_draw_count, stride);
+}
 
 void CommandBuffer::CmdDrawIndexed(uint32_t index_count, uint32_t instance_count, uint32_t first_index,
-                                   uint32_t vertex_offset, uint32_t first_instance) const {
+                                   int32_t vertex_offset, uint32_t first_instance) const {
 	vkCmdDrawIndexed(m_command_buffer, index_count, instance_count, first_index, vertex_offset, first_instance);
+}
+void CommandBuffer::CmdDrawIndexedIndirect(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset,
+                                           uint32_t draw_count, uint32_t stride) const {
+	vkCmdDrawIndexedIndirect(m_command_buffer, buffer->GetHandle(), offset, draw_count, stride);
+}
+void CommandBuffer::CmdDrawIndexedIndirectCount(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset,
+                                                const std::shared_ptr<BufferBase> &count_buffer,
+                                                VkDeviceSize count_buffer_offset, uint32_t max_draw_count,
+                                                uint32_t stride) const {
+	vkCmdDrawIndexedIndirectCount(m_command_buffer, buffer->GetHandle(), offset, count_buffer->GetHandle(),
+	                              count_buffer_offset, max_draw_count, stride);
 }
 
 void CommandBuffer::CmdNextSubpass(VkSubpassContents subpass_contents) const {
@@ -243,7 +321,7 @@ void CommandBuffer::CmdGenerateMipmap2D(const std::shared_ptr<ImageBase> &image,
 		    image->GetMemoryBarriers({subresource}, src_access_mask, dst_access_mask, old_layout, new_layout));
 		return;
 	}
-	int32_t mip_width = image->GetExtent().width, mip_height = image->GetExtent().height;
+	auto mip_width = (int32_t)image->GetExtent().width, mip_height = (int32_t)image->GetExtent().height;
 	for (uint32_t i = 1; i < image->GetMipLevels(); ++i) {
 		VkImageBlit blit{};
 		blit.srcOffsets[0] = {0, 0, 0};
@@ -274,7 +352,7 @@ void CommandBuffer::CmdGenerateMipmap2D(const std::shared_ptr<ImageBase> &image,
 		CmdBlitImage(image, image, blit, VK_FILTER_LINEAR);
 
 		CmdPipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, dst_stage, {}, {},
-		                   image->GetMemoryBarriers({blit.srcSubresource}, VK_ACCESS_TRANSFER_READ_BIT, dst_access_mask,
+		                   image->GetMemoryBarriers({blit.srcSubresource}, 0, dst_access_mask,
 		                                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, new_layout));
 		if (i == image->GetMipLevels() - 1) {
 			CmdPipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, dst_stage, {}, {},

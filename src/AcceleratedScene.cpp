@@ -133,8 +133,8 @@ void AcceleratedScene::load_textures(const std::shared_ptr<myvk::Queue> &graphic
 				uint32_t data_size = width * height * 4;
 				VkExtent2D extent = {(uint32_t)width, (uint32_t)height};
 				// Create staging buffer
-				std::shared_ptr<myvk::Buffer> staging_buffer = myvk::Buffer::CreateStaging(device, data_size);
-				staging_buffer->UpdateData(data, data + data_size);
+				std::shared_ptr<myvk::Buffer> staging_buffer =
+				    myvk::Buffer::CreateStaging(device, data, data + data_size);
 				// Free texture data
 				stbi_image_free(data);
 
@@ -223,8 +223,7 @@ void AcceleratedScene::create_triangle_buffers(const std::shared_ptr<myvk::Queue
 
 	{ // create triangles_staging_buffer
 		const std::vector<Triangle> &triangles = scene->GetTriangles();
-		triangles_staging_buffer = myvk::Buffer::CreateStaging(device, triangles.size() * sizeof(Triangle));
-		triangles_staging_buffer->UpdateData(triangles.data(), triangles.data() + triangles.size());
+		triangles_staging_buffer = myvk::Buffer::CreateStaging(device, triangles.begin(), triangles.end());
 	}
 
 	{ // create tri_materials_staging_buffer
@@ -233,14 +232,13 @@ void AcceleratedScene::create_triangle_buffers(const std::shared_ptr<myvk::Queue
 		load_textures(graphics_queue, scene->GetBasePath(), texture_name_map);
 		process_texture_errors(&tri_materials);
 
-		tri_materials_staging_buffer = myvk::Buffer::CreateStaging(device, tri_materials.size() * sizeof(Material));
-		tri_materials_staging_buffer->UpdateData(tri_materials.data(), tri_materials.data() + tri_materials.size());
+		tri_materials_staging_buffer = myvk::Buffer::CreateStaging(device, tri_materials.begin(), tri_materials.end());
 	}
 
-	m_triangles_buffer = myvk::Buffer::Create(device, triangles_staging_buffer->GetSize(), VMA_MEMORY_USAGE_GPU_ONLY,
+	m_triangles_buffer = myvk::Buffer::Create(device, triangles_staging_buffer->GetSize(), 0,
 	                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 	m_tri_materials_buffer =
-	    myvk::Buffer::Create(device, tri_materials_staging_buffer->GetSize(), VMA_MEMORY_USAGE_GPU_ONLY,
+	    myvk::Buffer::Create(device, tri_materials_staging_buffer->GetSize(), 0,
 	                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
 	std::shared_ptr<myvk::Fence> fence = myvk::Fence::Create(device);
@@ -268,29 +266,26 @@ void AcceleratedScene::create_bvh_buffers(const std::shared_ptr<myvk::Queue> &gr
 
 	{ // create bvh_nodes_staging_buffer
 		const std::vector<WideBVH::Node> &nodes = widebvh->GetNodes();
-		bvh_nodes_staging_buffer = myvk::Buffer::CreateStaging(device, nodes.size() * sizeof(WideBVH::Node));
-		bvh_nodes_staging_buffer->UpdateData(nodes.data(), nodes.data() + nodes.size());
+		bvh_nodes_staging_buffer = myvk::Buffer::CreateStaging(device, nodes.begin(), nodes.end());
 	}
 
 	{ // create bvh_tri_indices_staging_buffer
 		const std::vector<uint32_t> &tri_indices = widebvh->GetTriIndices();
-		bvh_tri_indices_staging_buffer = myvk::Buffer::CreateStaging(device, tri_indices.size() * sizeof(uint32_t));
-		bvh_tri_indices_staging_buffer->UpdateData(tri_indices.data(), tri_indices.data() + tri_indices.size());
+		bvh_tri_indices_staging_buffer = myvk::Buffer::CreateStaging(device, tri_indices.begin(), tri_indices.end());
 	}
 
 	{ // create bvh_tri_matrices_staging_buffer
 		std::vector<glm::vec4> tri_matrices = generate_bvh_tri_matrices(widebvh);
-		bvh_tri_matrices_staging_buffer = myvk::Buffer::CreateStaging(device, tri_matrices.size() * sizeof(glm::vec4));
-		bvh_tri_matrices_staging_buffer->UpdateData(tri_matrices.data(), tri_matrices.data() + tri_matrices.size());
+		bvh_tri_matrices_staging_buffer = myvk::Buffer::CreateStaging(device, tri_matrices.begin(), tri_matrices.end());
 	}
 
-	m_bvh_nodes_buffer = myvk::Buffer::Create(device, bvh_nodes_staging_buffer->GetSize(), VMA_MEMORY_USAGE_GPU_ONLY,
+	m_bvh_nodes_buffer = myvk::Buffer::Create(device, bvh_nodes_staging_buffer->GetSize(), 0,
 	                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 	m_bvh_tri_indices_buffer =
-	    myvk::Buffer::Create(device, bvh_tri_indices_staging_buffer->GetSize(), VMA_MEMORY_USAGE_GPU_ONLY,
+	    myvk::Buffer::Create(device, bvh_tri_indices_staging_buffer->GetSize(), 0,
 	                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 	m_bvh_tri_matrices_buffer =
-	    myvk::Buffer::Create(device, bvh_tri_matrices_staging_buffer->GetSize(), VMA_MEMORY_USAGE_GPU_ONLY,
+	    myvk::Buffer::Create(device, bvh_tri_matrices_staging_buffer->GetSize(), 0,
 	                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
 	std::shared_ptr<myvk::Fence> fence = myvk::Fence::Create(device);

@@ -7,6 +7,7 @@
 #include "DeviceObjectBase.hpp"
 #include "Fence.hpp"
 #include "Framebuffer.hpp"
+#include "ImagelessFramebuffer.hpp"
 #include "PipelineBase.hpp"
 #include "QueryPool.hpp"
 #include "RenderPass.hpp"
@@ -40,8 +41,12 @@ public:
 	VkResult Reset(VkCommandBufferResetFlags flags = 0) const;
 
 	VkResult Begin(VkCommandBufferUsageFlags usage = 0) const;
+	VkResult BeginSecondary(VkCommandBufferUsageFlags usage = 0) const;
 
 	VkResult End() const;
+
+	void CmdExecuteCommands(const std::vector<std::shared_ptr<CommandBuffer>> &command_buffers) const;
+	void CmdExecuteCommand(const std::shared_ptr<CommandBuffer> &command_buffer) const;
 
 	void CmdBeginRenderPass(const std::shared_ptr<RenderPass> &render_pass,
 	                        const std::shared_ptr<Framebuffer> &framebuffer,
@@ -51,6 +56,12 @@ public:
 
 	void CmdBeginRenderPass(const std::shared_ptr<RenderPass> &render_pass,
 	                        const std::shared_ptr<Framebuffer> &framebuffer,
+	                        const std::vector<VkClearValue> &clear_values,
+	                        VkSubpassContents subpass_contents = VK_SUBPASS_CONTENTS_INLINE) const;
+
+	void CmdBeginRenderPass(const std::shared_ptr<RenderPass> &render_pass,
+	                        const std::shared_ptr<ImagelessFramebuffer> &framebuffer,
+	                        const std::vector<std::shared_ptr<ImageView>> &attachments,
 	                        const std::vector<VkClearValue> &clear_values,
 	                        VkSubpassContents subpass_contents = VK_SUBPASS_CONTENTS_INLINE) const;
 
@@ -90,10 +101,30 @@ public:
 	             const std::vector<VkBufferImageCopy> &regions,
 	             VkImageLayout src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) const;
 
+	void CmdCopy(const std::shared_ptr<ImageBase> &src, const std::shared_ptr<ImageBase> &dst,
+	             const std::vector<VkImageCopy> &regions,
+	             VkImageLayout src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	             VkImageLayout dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) const;
+
 	void CmdDraw(uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) const;
 
-	void CmdDrawIndexed(uint32_t index_count, uint32_t instance_count, uint32_t first_index, uint32_t vertex_offset,
+	void CmdDrawIndirect(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset, uint32_t draw_count,
+	                     uint32_t stride = sizeof(VkDrawIndirectCommand)) const;
+
+	void CmdDrawIndirectCount(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset,
+	                          const std::shared_ptr<BufferBase> &count_buffer, VkDeviceSize count_buffer_offset,
+	                          uint32_t max_draw_count, uint32_t stride = sizeof(VkDrawIndirectCommand)) const;
+
+	void CmdDrawIndexed(uint32_t index_count, uint32_t instance_count, uint32_t first_index, int32_t vertex_offset,
 	                    uint32_t first_instance) const;
+
+	void CmdDrawIndexedIndirect(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset, uint32_t draw_count,
+	                            uint32_t stride = sizeof(VkDrawIndexedIndirectCommand)) const;
+
+	void CmdDrawIndexedIndirectCount(const std::shared_ptr<BufferBase> &buffer, VkDeviceSize offset,
+	                                 const std::shared_ptr<BufferBase> &count_buffer, VkDeviceSize count_buffer_offset,
+	                                 uint32_t max_draw_count,
+	                                 uint32_t stride = sizeof(VkDrawIndexedIndirectCommand)) const;
 
 	void CmdNextSubpass(VkSubpassContents subpass_contents = VK_SUBPASS_CONTENTS_INLINE) const;
 
@@ -133,7 +164,7 @@ public:
 
 	const std::shared_ptr<Device> &GetDevicePtr() const override { return m_command_pool_ptr->GetDevicePtr(); };
 
-	~CommandBuffer();
+	~CommandBuffer() override;
 };
 
 /*class CommandBufferGroup {

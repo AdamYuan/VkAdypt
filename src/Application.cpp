@@ -49,7 +49,7 @@ void Application::create_window() {
 
 void Application::create_render_pass() {
 	VkAttachmentDescription color_attachment = {};
-	color_attachment.format = m_frame_manager.GetSwapchain()->GetImageFormat();
+	color_attachment.format = m_frame_manager->GetSwapchain()->GetImageFormat();
 	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
 	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -112,28 +112,28 @@ void Application::create_render_pass() {
 }
 
 void Application::create_framebuffers() {
-	m_framebuffers.resize(m_frame_manager.GetSwapchain()->GetImageCount());
-	for (uint32_t i = 0; i < m_frame_manager.GetSwapchain()->GetImageCount(); ++i) {
-		m_framebuffers[i] = myvk::Framebuffer::Create(m_render_pass, m_frame_manager.GetSwapchainImageViews()[i]);
+	m_framebuffers.resize(m_frame_manager->GetSwapchain()->GetImageCount());
+	for (uint32_t i = 0; i < m_frame_manager->GetSwapchain()->GetImageCount(); ++i) {
+		m_framebuffers[i] = myvk::Framebuffer::Create(m_render_pass, m_frame_manager->GetSwapchainImageViews()[i]);
 	}
 }
 
 void Application::resize(uint32_t w, uint32_t h) {
-	for (uint32_t i = 0; i < m_frame_manager.GetSwapchain()->GetImageCount(); ++i) {
-		m_framebuffers[i] = myvk::Framebuffer::Create(m_render_pass, m_frame_manager.GetSwapchainImageViews()[i]);
+	for (uint32_t i = 0; i < m_frame_manager->GetSwapchain()->GetImageCount(); ++i) {
+		m_framebuffers[i] = myvk::Framebuffer::Create(m_render_pass, m_frame_manager->GetSwapchainImageViews()[i]);
 	}
 	m_camera->m_aspect_ratio = w / float(h);
 	m_ray_tracer->Resize(w, h);
 }
 
 void Application::draw_frame() {
-	if (!m_frame_manager.NewFrame())
+	if (!m_frame_manager->NewFrame())
 		return;
 
-	uint32_t image_index = m_frame_manager.GetCurrentImageIndex();
-	uint32_t current_frame = m_frame_manager.GetCurrentFrame();
+	uint32_t image_index = m_frame_manager->GetCurrentImageIndex();
+	uint32_t current_frame = m_frame_manager->GetCurrentFrame();
 	m_camera->UpdateFrameUniformBuffer(current_frame);
-	const std::shared_ptr<myvk::CommandBuffer> &command_buffer = m_frame_manager.GetCurrentCommandBuffer();
+	const std::shared_ptr<myvk::CommandBuffer> &command_buffer = m_frame_manager->GetCurrentCommandBuffer();
 
 	command_buffer->Begin();
 
@@ -144,7 +144,7 @@ void Application::draw_frame() {
 	command_buffer->CmdEndRenderPass();
 	command_buffer->End();
 
-	m_frame_manager.Render();
+	m_frame_manager->Render();
 }
 
 void Application::initialize_vulkan() {
@@ -287,8 +287,10 @@ Application::Application() {
 
 	create_window();
 	initialize_vulkan();
-	m_frame_manager.Initialize(m_main_queue, m_present_queue, false, kFrameCount);
-	m_frame_manager.SetResizeFunc([&](uint32_t w, uint32_t h) { resize(w, h); });
+	m_frame_manager = myvk::FrameManager::Create(m_main_queue, m_present_queue, false, kFrameCount);
+	m_frame_manager->SetResizeFunc([this](const myvk::FrameManager &frame_manager) {
+		resize(frame_manager.GetExtent().width, frame_manager.GetExtent().height);
+	});
 
 	glfwSetWindowTitle(
 	    m_window,
@@ -339,7 +341,7 @@ void Application::Run() {
 		draw_frame();
 		lst_time = cur_time;
 	}
-	m_frame_manager.WaitIdle();
+	m_frame_manager->WaitIdle();
 	m_device->WaitIdle();
 }
 
@@ -354,5 +356,5 @@ void Application::glfw_key_callback(GLFWwindow *window, int key, int scancode, i
 
 void Application::glfw_framebuffer_resize_callback(GLFWwindow *window, int width, int height) {
 	auto *app = (Application *)glfwGetWindowUserPointer(window);
-	app->m_frame_manager.Resize();
+	app->m_frame_manager->Resize();
 }

@@ -24,7 +24,9 @@ std::shared_ptr<Camera> Camera::Create(const std::shared_ptr<myvk::Device> &devi
 	ret->m_uniform_buffers.resize(frame_count);
 
 	for (uint32_t i = 0; i < frame_count; ++i) {
-		ret->m_uniform_buffers[i] = myvk::Buffer::Create(device, sizeof(UniformData), VMA_MEMORY_USAGE_CPU_TO_GPU,
+		ret->m_uniform_buffers[i] = myvk::Buffer::Create(device, sizeof(UniformData),
+		                                                 VMA_ALLOCATION_CREATE_MAPPED_BIT |
+		                                                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
 		                                                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 		ret->m_descriptor_sets[i]->UpdateUniformBuffer(ret->m_uniform_buffers[i], 0);
 	}

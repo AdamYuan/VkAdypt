@@ -9,9 +9,9 @@
 #include <spdlog/sinks/ringbuffer_sink.h>
 
 #include <myvk/FrameManager.hpp>
+#include <myvk/ImGuiRenderer.hpp>
 
 #include "Camera.hpp"
-#include "ImGuiRenderer.hpp"
 #include "RayTracer.hpp"
 
 class Application {
@@ -27,13 +27,13 @@ private:
 	std::shared_ptr<myvk::CommandPool> m_main_command_pool, m_path_tracer_command_pool;
 
 	// frame objects
-	myvk::FrameManager m_frame_manager;
+	std::shared_ptr<myvk::FrameManager> m_frame_manager;
 	std::vector<std::shared_ptr<myvk::Framebuffer>> m_framebuffers;
 
 	// render pass
 	std::shared_ptr<myvk::RenderPass> m_render_pass;
 
-	ImGuiRenderer m_imgui_renderer;
+	myvk::ImGuiRenderer m_imgui_renderer;
 
 	// global resources
 	std::shared_ptr<Camera> m_camera;
