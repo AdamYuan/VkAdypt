@@ -48,67 +48,17 @@ void Application::create_window() {
 }
 
 void Application::create_render_pass() {
-	VkAttachmentDescription color_attachment = {};
-	color_attachment.format = m_frame_manager->GetSwapchain()->GetImageFormat();
-	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	myvk::RenderPassState state{};
+	state.Initialize(2, 1);
 
-	VkAttachmentReference color_attachment_ref = {};
-	color_attachment_ref.attachment = 0;
-	color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	state.RegisterAttachment(0, "color_attachment", m_frame_manager->GetSwapchain()->GetImageFormat(),
+	                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_SAMPLE_COUNT_1_BIT,
+	                         VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_STORE);
 
-	std::vector<VkSubpassDescription> subpasses(2);
-	subpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpasses[0].colorAttachmentCount = 1;
-	subpasses[0].pColorAttachments = &color_attachment_ref;
-	subpasses[0].pDepthStencilAttachment = nullptr;
+	state.RegisterSubpass(0, "color_pass").AddDefaultColorAttachment("color_attachment", nullptr);
+	state.RegisterSubpass(1, "gui_pass").AddDefaultColorAttachment("color_attachment", "color_pass");
 
-	subpasses[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpasses[1].colorAttachmentCount = 1;
-	subpasses[1].pColorAttachments = &color_attachment_ref;
-	subpasses[1].pDepthStencilAttachment = nullptr;
-
-	VkRenderPassCreateInfo render_pass_info = {};
-	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	render_pass_info.attachmentCount = 1;
-	render_pass_info.pAttachments = &color_attachment;
-	render_pass_info.subpassCount = subpasses.size();
-	render_pass_info.pSubpasses = subpasses.data();
-
-	std::vector<VkSubpassDependency> subpass_dependencies(3);
-	subpass_dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-	subpass_dependencies[0].dstSubpass = 0;
-	subpass_dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	subpass_dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	subpass_dependencies[0].srcAccessMask = 0;
-	subpass_dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-	subpass_dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-	subpass_dependencies[1].srcSubpass = 0;
-	subpass_dependencies[1].dstSubpass = 1;
-	subpass_dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	subpass_dependencies[1].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	subpass_dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-	subpass_dependencies[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-	subpass_dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-	subpass_dependencies[2].srcSubpass = 1;
-	subpass_dependencies[2].dstSubpass = VK_SUBPASS_EXTERNAL;
-	subpass_dependencies[2].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	subpass_dependencies[2].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-	subpass_dependencies[2].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-	subpass_dependencies[2].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-	subpass_dependencies[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-	render_pass_info.dependencyCount = subpass_dependencies.size();
-	render_pass_info.pDependencies = subpass_dependencies.data();
-
-	m_render_pass = myvk::RenderPass::Create(m_device, render_pass_info);
+	m_render_pass = myvk::RenderPass::Create(m_device, state);
 }
 
 void Application::create_framebuffers() {

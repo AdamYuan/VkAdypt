@@ -1,7 +1,7 @@
 namespace wide_bvh_detail {
 
 template <class BVHType> void WideBVHBuilder<BVHType>::Run() {
-	m_costs.resize(m_bin_bvh.GetNodeCount());
+	m_costs.resize(m_bin_bvh.GetNodeRange());
 	calculate_cost(0);
 	spdlog::info("WideBVH cost analyzed");
 
@@ -23,7 +23,7 @@ WideBVHBuilder<BVHType>::WideBVHBuilder(WideBVH *p_wbvh, const BinaryBVHBase<BVH
 }
 
 template <class BVHType> uint32_t WideBVHBuilder<BVHType>::calculate_cost(uint32_t node_idx) {
-	float area = m_bin_bvh.GetBox(node_idx).GetArea();
+	float area = m_bin_bvh.GetAABB(node_idx).GetArea();
 	// is leaf, then initialize
 	if (m_bin_bvh.IsLeaf(node_idx)) {
 		for (uint32_t i = 1; i <= 7; ++i) {
@@ -157,7 +157,7 @@ template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(uint32_t wbv
 	uint32_t ch_idx_arr[8], ch_cnt = 0;
 	fetch_children(sbvh_node_idx, 1, &ch_cnt, ch_idx_arr);
 
-	const AABB &cur_box = m_bin_bvh.GetBox(sbvh_node_idx);
+	const AABB &cur_box = m_bin_bvh.GetAABB(sbvh_node_idx);
 	glm::vec3 cell; // cell size
 	{
 		// fetch lo position
@@ -185,7 +185,7 @@ template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(uint32_t wbv
 		glm::vec3 dist;
 		for (uint32_t i = 0; i < ch_cnt; ++i)
 			for (uint32_t j = 0; j < 8; ++j) {
-				dist = m_bin_bvh.GetBox(ch_idx_arr[i]).GetCenter() - m_bin_bvh.GetBox(sbvh_node_idx).GetCenter();
+				dist = m_bin_bvh.GetAABB(ch_idx_arr[i]).GetCenter() - m_bin_bvh.GetAABB(sbvh_node_idx).GetCenter();
 				ch_cost_mat[i][j] = ((j & 1u) ? -dist.x : dist.x) + ((j & 2u) ? -dist.y : dist.y) +
 				                    ((j & 4u) ? -dist.z : dist.z); // project to diagonal ray
 			}
@@ -205,8 +205,8 @@ template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(uint32_t wbv
 	for (uint32_t i = 0; i < 8; ++i) {
 		uint32_t sidx = ch_ranked_idx_arr[i];
 		if (~sidx) {
-			glm::uvec3 qlow = glm::floor((m_bin_bvh.GetBox(sidx).m_min - cur_box.m_min) / cell);
-			glm::uvec3 qhigh = glm::ceil((m_bin_bvh.GetBox(sidx).m_max - cur_box.m_min) / cell);
+			glm::uvec3 qlow = glm::floor((m_bin_bvh.GetAABB(sidx).m_min - cur_box.m_min) / cell);
+			glm::uvec3 qhigh = glm::ceil((m_bin_bvh.GetAABB(sidx).m_max - cur_box.m_min) / cell);
 			// TODO: cast NaN to uint ?
 			qlow = glm::min(qlow, glm::uvec3(UINT8_MAX));
 			qhigh = glm::min(qhigh, glm::uvec3(UINT8_MAX));

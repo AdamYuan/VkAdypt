@@ -20,15 +20,15 @@ private:
 	uint32_t m_leaves_cnt{};
 
 public:
-	bool empty() const { return m_nodes.empty(); }
-	bool is_leaf(uint32_t idx) const { return m_nodes[idx].m_left_idx == -1; }
-	uint32_t get_left(uint32_t idx) const { return m_nodes[idx].m_left_idx; }
-	static uint32_t get_right(uint32_t idx) { return idx + 1; }
-	uint32_t get_triangle_idx(uint32_t idx) const { return m_nodes[idx].m_tri_idx; }
-	const AABB &get_aabb(uint32_t idx) const { return m_nodes[idx].m_aabb; }
+	inline bool empty() const { return m_nodes.empty(); }
+	inline bool is_leaf(uint32_t idx) const { return m_nodes[idx].m_left_idx == -1; }
+	inline uint32_t get_left(uint32_t idx) const { return m_nodes[idx].m_left_idx; }
+	inline static uint32_t get_right(uint32_t idx) { return idx + 1; }
+	inline uint32_t get_triangle_idx(uint32_t idx) const { return m_nodes[idx].m_tri_idx; }
+	inline const AABB &get_aabb(uint32_t idx) const { return m_nodes[idx].m_aabb; }
 
-	uint32_t get_node_count() const { return m_nodes.size(); }
-	uint32_t get_leaf_count() const { return m_leaves_cnt; }
+	inline uint32_t get_node_range() const { return m_nodes.size(); }
+	inline uint32_t get_leaf_count() const { return m_leaves_cnt; }
 
 public:
 	inline FlatSBVH(const BVHConfig &config, const std::shared_ptr<Scene> &scene)
