@@ -2,12 +2,12 @@ namespace wide_bvh_detail {
 
 template <class BVHType> void WideBVHBuilder<BVHType>::Run() {
 	m_costs.resize(m_bin_bvh.GetNodeRange());
-	calculate_cost(0);
+	calculate_cost(m_bin_bvh.GetRoot());
 	spdlog::info("WideBVH cost analyzed");
 
 	m_p_wbvh->m_nodes.emplace_back();
 	m_p_wbvh->m_tri_indices.reserve((size_t)m_bin_bvh.GetLeafCount());
-	create_nodes(0, 0);
+	create_nodes(0, m_bin_bvh.GetRoot());
 	spdlog::info("WideBVH built with {} nodes", m_p_wbvh->m_nodes.size());
 
 	m_p_wbvh->m_nodes.shrink_to_fit();
@@ -178,7 +178,7 @@ template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(uint32_t wbv
 	}
 
 	// ordering the children with hungarian assignment algorithm
-	uint32_t ch_slot_arr[8];
+	std::array<uint32_t, 8> ch_slot_arr{};
 
 	{
 		static float ch_cost_mat[8][8];
@@ -189,7 +189,7 @@ template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(uint32_t wbv
 				ch_cost_mat[i][j] = ((j & 1u) ? -dist.x : dist.x) + ((j & 2u) ? -dist.y : dist.y) +
 				                    ((j & 4u) ? -dist.z : dist.z); // project to diagonal ray
 			}
-		hungarian(ch_cost_mat, ch_cnt, ch_slot_arr);
+		hungarian(ch_cost_mat, ch_cnt, ch_slot_arr.data());
 	}
 
 	uint32_t ch_ranked_idx_arr[8];

@@ -21,6 +21,7 @@ public:
 
 	inline bool Empty() const { return ((BVHType *)this)->empty(); }
 	inline bool IsLeaf(uint32_t idx) const { return ((BVHType *)this)->is_leaf(idx); }
+	inline uint32_t GetRoot() const { return ((BVHType *)this)->get_root(); }
 	inline uint32_t GetLeft(uint32_t idx) const { return ((BVHType *)this)->get_left(idx); }
 	inline uint32_t GetRight(uint32_t idx) const { return ((BVHType *)this)->get_right(idx); }
 	inline uint32_t GetTriangleIdx(uint32_t idx) const { return ((BVHType *)this)->get_triangle_idx(idx); }
