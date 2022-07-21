@@ -3,10 +3,6 @@ project(Adypt)
 
 set(CMAKE_CXX_STANDARD 17)
 
-if (NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif ()
-
 # Windows' math include does not define constants by default.
 # Set this definition so it does.
 # Also set NOMINMAX so the min and max functions are not overwritten with macros.
@@ -42,8 +38,13 @@ add_executable(Adypt
         src/UIHelper.cpp
 
         # BVH
-        src/FlatSBVH.hpp
-        src/FlatSBVH.cpp
+        src/BinaryBVH.hpp
+
+        src/SBVHBuilder.hpp
+        src/SBVHBuilder.cpp
+        src/ParallelSBVHBuilder.cpp
+        src/ParallelSBVHBuilder.hpp
+
         src/WideBVH.hpp
         src/WideBVH.cpp
         # src/WideBVHBuilder.cpp
@@ -58,7 +59,7 @@ add_executable(Adypt
         src/Shape.hpp
         src/Scene.hpp
         src/Scene.cpp
-        )
+        src/AtomicAllocator.hpp)
 
 # find_package(OpenMP)
 # if(OpenMP_CXX_FOUND)

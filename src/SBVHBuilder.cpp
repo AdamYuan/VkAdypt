@@ -1,114 +1,37 @@
-#include "FlatSBVH.hpp"
+#include "SBVHBuilder.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <pdqsort.h>
 #include <spdlog/spdlog.h>
 
-class FlatSBVHBuilder {
-private:
-	static constexpr uint32_t kSpatialBinNum = 32;
-
-	struct Reference {
-		AABB m_aabb;
-		uint32_t m_tri_index{};
-	};
-	struct NodeSpec {
-		AABB m_aabb;
-		uint32_t m_ref_num{};
-	};
-	struct ObjectSplit {
-		AABB m_left_aabb, m_right_aabb;
-		uint32_t m_dim{}, m_left_num{};
-		float m_sah{};
-	};
-	struct SpatialSplit {
-		uint32_t m_dim;
-		float m_pos, m_sah;
-	};
-	struct SpatialBin {
-		AABB m_aabb;
-		uint32_t m_in{}, m_out{};
-	};
-
-	FlatSBVH *m_bvh;
-	const Scene &m_scene;
-	const BVHConfig &m_config;
-
-	SpatialBin m_spatial_bins[kSpatialBinNum];
-
-	std::vector<AABB> m_right_aabbs; // store right aabb result
-	std::vector<Reference> m_refstack;
-
-	float m_min_overlap_area;
-
-	// for std::sort
-	template <uint32_t DIM> inline static bool reference_cmp(const Reference &l, const Reference &r);
-	template <uint32_t DIM> inline void sort_spec(const NodeSpec &t_spec);
-	inline void sort_spec(const NodeSpec &t_spec, uint32_t dim);
-	inline uint32_t get_ref_index(const NodeSpec &t_spec) { return (uint32_t)m_refstack.size() - t_spec.m_ref_num; }
-	inline uint32_t build_leaf(const NodeSpec &t_spec);
-
-	template <uint32_t DIM> inline void _find_object_split_dim(const NodeSpec &t_spec, ObjectSplit *t_os);
-	inline void find_object_split(const NodeSpec &t_spec, ObjectSplit *t_os);
-	inline void perform_object_split(const NodeSpec &t_spec, const ObjectSplit &t_os, NodeSpec *t_left,
-	                                 NodeSpec *t_right);
-	inline void split_reference(const Reference &t_ref, uint32_t t_dim, float t_pos, Reference *t_left,
-	                            Reference *t_right);
-	template <uint32_t DIM> inline void _find_spatial_split_dim(const NodeSpec &t_spec, SpatialSplit *t_ss);
-	inline void find_spatial_split(const NodeSpec &t_spec, SpatialSplit *t_ss);
-	inline void perform_spatial_split(const NodeSpec &t_spec, const SpatialSplit &t_ss, NodeSpec *t_left,
-	                                  NodeSpec *t_right);
-	uint32_t build_node(const NodeSpec &t_spec, uint32_t t_depth);
-	inline uint32_t push_node() {
-		m_bvh->m_nodes.emplace_back();
-		return m_bvh->m_nodes.size() - 1;
-	}
-
-public:
-	FlatSBVHBuilder(FlatSBVH *bvh, const Scene &scene)
-	    : m_scene(scene), m_bvh(bvh),
-	      m_config(bvh->GetConfig()), m_min_overlap_area{scene.GetAABB().GetArea() * 1e-5f} {
-		m_bvh->m_leaves_cnt = 0;
-		m_bvh->m_nodes.clear();
-	}
-	void Run();
-};
-
-std::shared_ptr<BinaryBVHBase<FlatSBVH>> FlatSBVH::Build(const BVHConfig &config, const std::shared_ptr<Scene> &scene) {
-	std::shared_ptr<FlatSBVH> ret = std::make_shared<FlatSBVH>(config, scene);
-	FlatSBVHBuilder builder{ret.get(), *scene};
-	builder.Run();
-	return ret;
-}
-
 template <uint32_t DIM>
-bool FlatSBVHBuilder::reference_cmp(const FlatSBVHBuilder::Reference &l, const FlatSBVHBuilder::Reference &r) {
+bool SBVHBuilder::reference_cmp(const SBVHBuilder::Reference &l, const SBVHBuilder::Reference &r) {
 	float lc = l.m_aabb.GetCenter()[DIM], rc = r.m_aabb.GetCenter()[DIM];
 	return lc < rc || (lc == rc && l.m_tri_index < r.m_tri_index);
 }
 
-template <uint32_t DIM> void FlatSBVHBuilder::sort_spec(const FlatSBVHBuilder::NodeSpec &t_spec) {
-	std::sort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
-	          reference_cmp<DIM>);
+template <uint32_t DIM> void SBVHBuilder::sort_spec(const SBVHBuilder::NodeSpec &t_spec) {
+	pdqsort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
+	        reference_cmp<DIM>);
 }
 
-void FlatSBVHBuilder::sort_spec(const FlatSBVHBuilder::NodeSpec &t_spec, uint32_t dim) {
-	std::sort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
-	          dim != 0 ? (dim == 1 ? reference_cmp<1> : reference_cmp<2>) : reference_cmp<0>);
+void SBVHBuilder::sort_spec(const SBVHBuilder::NodeSpec &t_spec, uint32_t dim) {
+	pdqsort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
+	        dim != 0 ? (dim == 1 ? reference_cmp<1> : reference_cmp<2>) : reference_cmp<0>);
 }
 
-uint32_t FlatSBVHBuilder::build_leaf(const FlatSBVHBuilder::NodeSpec &t_spec) {
+uint32_t SBVHBuilder::build_leaf(const SBVHBuilder::NodeSpec &t_spec) {
 	uint32_t node = push_node();
-	m_bvh->m_nodes[node].m_aabb = t_spec.m_aabb;
-	m_bvh->m_nodes[node].m_left_idx = UINT32_MAX; // mark to -1 for leaf
-	m_bvh->m_nodes[node].m_tri_idx = m_refstack.back().m_tri_index;
+	m_nodes[node].m_aabb = t_spec.m_aabb;
+	m_nodes[node].m_left_idx = UINT32_MAX; // mark to -1 for leaf
+	m_nodes[node].m_tri_idx = m_refstack.back().m_tri_index;
 	m_refstack.pop_back();
 	return node;
 }
 
 template <uint32_t DIM>
-void FlatSBVHBuilder::_find_object_split_dim(const FlatSBVHBuilder::NodeSpec &t_spec,
-                                             FlatSBVHBuilder::ObjectSplit *t_os) {
+void SBVHBuilder::_find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::ObjectSplit *t_os) {
 	sort_spec<DIM>(t_spec);
 	Reference *refs = m_refstack.data() + get_ref_index(t_spec);
 
@@ -133,7 +56,7 @@ void FlatSBVHBuilder::_find_object_split_dim(const FlatSBVHBuilder::NodeSpec &t_
 	}
 }
 
-void FlatSBVHBuilder::find_object_split(const FlatSBVHBuilder::NodeSpec &t_spec, FlatSBVHBuilder::ObjectSplit *t_os) {
+void SBVHBuilder::find_object_split(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::ObjectSplit *t_os) {
 	t_os->m_sah = FLT_MAX;
 
 	_find_object_split_dim<0>(t_spec, t_os);
@@ -141,8 +64,8 @@ void FlatSBVHBuilder::find_object_split(const FlatSBVHBuilder::NodeSpec &t_spec,
 	_find_object_split_dim<2>(t_spec, t_os);
 }
 
-void FlatSBVHBuilder::split_reference(const FlatSBVHBuilder::Reference &t_ref, uint32_t t_dim, float t_pos,
-                                      FlatSBVHBuilder::Reference *t_left, FlatSBVHBuilder::Reference *t_right)
+void SBVHBuilder::split_reference(const SBVHBuilder::Reference &t_ref, uint32_t t_dim, float t_pos,
+                                  SBVHBuilder::Reference *t_left, SBVHBuilder::Reference *t_right)
 // if the part is invalid, set m_tri_index to -1
 {
 	t_left->m_aabb = t_right->m_aabb = AABB();
@@ -173,8 +96,7 @@ void FlatSBVHBuilder::split_reference(const FlatSBVHBuilder::Reference &t_ref, u
 }
 
 template <uint32_t DIM>
-void FlatSBVHBuilder::_find_spatial_split_dim(const FlatSBVHBuilder::NodeSpec &t_spec,
-                                              FlatSBVHBuilder::SpatialSplit *t_ss) {
+void SBVHBuilder::_find_spatial_split_dim(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::SpatialSplit *t_ss) {
 	std::fill(m_spatial_bins, m_spatial_bins + kSpatialBinNum, SpatialBin{AABB(), 0, 0}); // initialize bins
 
 	float bin_width = t_spec.m_aabb.GetExtent()[DIM] / kSpatialBinNum, inv_bin_width = 1.0f / bin_width;
@@ -223,16 +145,15 @@ void FlatSBVHBuilder::_find_spatial_split_dim(const FlatSBVHBuilder::NodeSpec &t
 	}
 }
 
-void FlatSBVHBuilder::find_spatial_split(const FlatSBVHBuilder::NodeSpec &t_spec, FlatSBVHBuilder::SpatialSplit *t_ss) {
+void SBVHBuilder::find_spatial_split(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::SpatialSplit *t_ss) {
 	t_ss->m_sah = FLT_MAX;
 	_find_spatial_split_dim<0>(t_spec, t_ss);
 	_find_spatial_split_dim<1>(t_spec, t_ss);
 	_find_spatial_split_dim<2>(t_spec, t_ss);
 }
 
-void FlatSBVHBuilder::perform_spatial_split(const FlatSBVHBuilder::NodeSpec &t_spec,
-                                            const FlatSBVHBuilder::SpatialSplit &t_ss,
-                                            FlatSBVHBuilder::NodeSpec *t_left, FlatSBVHBuilder::NodeSpec *t_right) {
+void SBVHBuilder::perform_spatial_split(const SBVHBuilder::NodeSpec &t_spec, const SBVHBuilder::SpatialSplit &t_ss,
+                                        SBVHBuilder::NodeSpec *t_left, SBVHBuilder::NodeSpec *t_right) {
 	t_left->m_aabb = t_right->m_aabb = AABB();
 
 	uint32_t refs = get_ref_index(t_spec);
@@ -298,9 +219,8 @@ void FlatSBVHBuilder::perform_spatial_split(const FlatSBVHBuilder::NodeSpec &t_s
 	t_right->m_ref_num = right_end - right_begin;
 }
 
-void FlatSBVHBuilder::perform_object_split(const FlatSBVHBuilder::NodeSpec &t_spec,
-                                           const FlatSBVHBuilder::ObjectSplit &t_os, FlatSBVHBuilder::NodeSpec *t_left,
-                                           FlatSBVHBuilder::NodeSpec *t_right) {
+void SBVHBuilder::perform_object_split(const SBVHBuilder::NodeSpec &t_spec, const SBVHBuilder::ObjectSplit &t_os,
+                                       SBVHBuilder::NodeSpec *t_left, SBVHBuilder::NodeSpec *t_right) {
 	sort_spec(t_spec, t_os.m_dim);
 
 	t_left->m_ref_num = t_os.m_left_num;
@@ -310,7 +230,7 @@ void FlatSBVHBuilder::perform_object_split(const FlatSBVHBuilder::NodeSpec &t_sp
 	t_right->m_aabb = t_os.m_right_aabb;
 }
 
-uint32_t FlatSBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
+uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 	if (t_spec.m_ref_num == 1)
 		return build_leaf(t_spec);
 
@@ -329,7 +249,7 @@ uint32_t FlatSBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 	}
 
 	uint32_t node = push_node(); // alloc new node
-	m_bvh->m_nodes[node].m_aabb = t_spec.m_aabb;
+	m_nodes[node].m_aabb = t_spec.m_aabb;
 
 	NodeSpec left, right;
 	left.m_ref_num = right.m_ref_num = 0;
@@ -342,12 +262,12 @@ uint32_t FlatSBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 	build_node(right, t_depth + 1);
 	// use a temp variable to get the return value()
 	uint32_t lidx = build_node(left, t_depth + 1);
-	m_bvh->m_nodes[node].m_left_idx = lidx;
+	m_nodes[node].m_left_idx = lidx;
 
 	return node;
 }
 
-void FlatSBVHBuilder::Run() {
+void SBVHBuilder::Run() {
 	m_right_aabbs.reserve(m_scene.GetTriangles().size());
 
 	// init reference stack
@@ -358,13 +278,13 @@ void FlatSBVHBuilder::Run() {
 		m_refstack[i].m_aabb = m_scene.GetTriangles()[i].GetAABB();
 	}
 
-	m_bvh->m_nodes.reserve(m_scene.GetTriangles().size() * 2);
+	m_nodes.reserve(m_scene.GetTriangles().size() * 2);
 
 	auto start = std::chrono::steady_clock::now();
 	build_node({m_scene.GetAABB(), (uint32_t)m_scene.GetTriangles().size()}, 0);
 
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-	spdlog::info("SBVH built with {} nodes in {} ms", m_bvh->m_nodes.size(), duration.count());
+	spdlog::info("SBVH built with {} nodes in {} ms", m_nodes.size(), duration.count());
 
-	m_bvh->m_nodes.shrink_to_fit();
+	m_nodes.shrink_to_fit();
 }
