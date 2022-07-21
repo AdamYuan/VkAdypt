@@ -262,9 +262,7 @@ Application::~Application() {
 void Application::Load(const char *filename) {
 	BVHConfig bvh_config = {};
 	std::shared_ptr<Scene> scene = Scene::CreateFromFile(filename);
-	ParallelSBVHBuilder test_builder{bvh_config, *scene};
-	test_builder.Run();
-	std::shared_ptr<BinaryBVH> sbvh = BinaryBVH::Build<SBVHBuilder>(bvh_config, scene);
+	std::shared_ptr<BinaryBVH> sbvh = BinaryBVH::Build<ParallelSBVHBuilder>(bvh_config, scene);
 	std::shared_ptr<WideBVH> widebvh = WideBVH::Build(sbvh);
 	widebvh->SaveToFile("a.bvh");
 	m_accelerated_scene = AcceleratedScene::Create(m_loader_queue, widebvh);

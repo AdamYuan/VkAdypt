@@ -10,9 +10,9 @@
 class BinaryBVH {
 public:
 	struct Node { // a bvh with only 1 primitive per node
-		AABB m_aabb;
-		uint32_t m_tri_idx{};  // triangle index
-		uint32_t m_left_idx{}; // left node index (right node index = current + 1)
+		AABB aabb;
+		uint32_t tri_idx{};  // triangle index
+		uint32_t left_idx{}; // left node index (-1 for leaf nodes) (right node index = current + 1)
 	};
 
 private:
@@ -38,11 +38,11 @@ public:
 	inline const std::shared_ptr<Scene> &GetScenePtr() const { return m_scene_ptr; }
 	inline const BVHConfig &GetConfig() const { return m_config; }
 
-	inline bool IsLeaf(uint32_t idx) const { return m_nodes[idx].m_left_idx == -1; }
-	inline uint32_t GetLeft(uint32_t idx) const { return m_nodes[idx].m_left_idx; }
+	inline bool IsLeaf(uint32_t idx) const { return m_nodes[idx].left_idx == -1; }
+	inline uint32_t GetLeft(uint32_t idx) const { return m_nodes[idx].left_idx; }
 	inline uint32_t GetRight(uint32_t idx) const { return idx + 1; }
-	inline uint32_t GetTriangleIdx(uint32_t idx) const { return m_nodes[idx].m_tri_idx; }
-	inline const AABB &GetAABB(uint32_t idx) const { return m_nodes[idx].m_aabb; }
+	inline uint32_t GetTriangleIdx(uint32_t idx) const { return m_nodes[idx].tri_idx; }
+	inline const AABB &GetAABB(uint32_t idx) const { return m_nodes[idx].aabb; }
 
 	inline uint32_t GetRoot() const { return 0; }
 	inline bool Empty() const { return m_nodes.empty(); }

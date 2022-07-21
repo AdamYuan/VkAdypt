@@ -61,56 +61,56 @@ void Scene::extract_shapes(const tinyobj::attrib_t &attrib, const std::vector<ti
 				Triangle &tri = m_triangles.back();
 
 				{
-					tri.m_matid = shape.mesh.material_ids[face];
+					tri.matid = shape.mesh.material_ids[face];
 
 					tinyobj::index_t index = shape.mesh.indices[index_offset + v];
 					{
-						tri.m_positions[0] = {attrib.vertices[3 * index.vertex_index + 0],
+						tri.positions[0] = {attrib.vertices[3 * index.vertex_index + 0],
 						                      attrib.vertices[3 * index.vertex_index + 1],
 						                      attrib.vertices[3 * index.vertex_index + 2]};
 						if (~index.normal_index)
-							tri.m_normals[0] = {attrib.normals[3 * index.normal_index + 0],
+							tri.normals[0] = {attrib.normals[3 * index.normal_index + 0],
 							                    attrib.normals[3 * index.normal_index + 1],
 							                    attrib.normals[3 * index.normal_index + 2]};
 
 						if (~index.texcoord_index)
-							tri.m_texcoords[0] = {attrib.texcoords[2 * index.texcoord_index + 0],
+							tri.texcoords[0] = {attrib.texcoords[2 * index.texcoord_index + 0],
 							                      1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
 					}
 					index = shape.mesh.indices[index_offset + v + 1];
 					{
-						tri.m_positions[1] = {attrib.vertices[3 * index.vertex_index + 0],
+						tri.positions[1] = {attrib.vertices[3 * index.vertex_index + 0],
 						                      attrib.vertices[3 * index.vertex_index + 1],
 						                      attrib.vertices[3 * index.vertex_index + 2]};
 						if (~index.normal_index)
-							tri.m_normals[1] = {attrib.normals[3 * index.normal_index + 0],
+							tri.normals[1] = {attrib.normals[3 * index.normal_index + 0],
 							                    attrib.normals[3 * index.normal_index + 1],
 							                    attrib.normals[3 * index.normal_index + 2]};
 
 						if (~index.texcoord_index)
-							tri.m_texcoords[1] = {attrib.texcoords[2 * index.texcoord_index + 0],
+							tri.texcoords[1] = {attrib.texcoords[2 * index.texcoord_index + 0],
 							                      1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
 					}
 
 					index = shape.mesh.indices[index_offset + v + 2];
 					{
-						tri.m_positions[2] = {attrib.vertices[3 * index.vertex_index + 0],
+						tri.positions[2] = {attrib.vertices[3 * index.vertex_index + 0],
 						                      attrib.vertices[3 * index.vertex_index + 1],
 						                      attrib.vertices[3 * index.vertex_index + 2]};
 						if (~index.normal_index)
-							tri.m_normals[2] = {attrib.normals[3 * index.normal_index + 0],
+							tri.normals[2] = {attrib.normals[3 * index.normal_index + 0],
 							                    attrib.normals[3 * index.normal_index + 1],
 							                    attrib.normals[3 * index.normal_index + 2]};
 
 						if (~index.texcoord_index)
-							tri.m_texcoords[2] = {attrib.texcoords[2 * index.texcoord_index + 0],
+							tri.texcoords[2] = {attrib.texcoords[2 * index.texcoord_index + 0],
 							                      1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
 					}
 
 					// generate normal
 					if (index.normal_index == -1) {
-						tri.m_normals[2] = tri.m_normals[0] = tri.m_normals[1] = glm::normalize(glm::cross(
-						    tri.m_positions[1] - tri.m_positions[0], tri.m_positions[2] - tri.m_positions[0]));
+						tri.normals[2] = tri.normals[0] = tri.normals[1] = glm::normalize(glm::cross(
+						    tri.positions[1] - tri.positions[0], tri.positions[2] - tri.positions[0]));
 						gen_normal_warn = true;
 					}
 				}
@@ -130,13 +130,13 @@ void Scene::normalize() {
 	float inv_extent = 1.0f / extent;
 	glm::vec3 center = m_aabb.GetCenter();
 	for (auto &i : m_triangles) {
-		i.m_positions[0] = (i.m_positions[0] - center) * inv_extent;
-		i.m_positions[1] = (i.m_positions[1] - center) * inv_extent;
-		i.m_positions[2] = (i.m_positions[2] - center) * inv_extent;
+		i.positions[0] = (i.positions[0] - center) * inv_extent;
+		i.positions[1] = (i.positions[1] - center) * inv_extent;
+		i.positions[2] = (i.positions[2] - center) * inv_extent;
 	}
-	m_aabb.m_min = (m_aabb.m_min - center) * inv_extent;
-	m_aabb.m_max = (m_aabb.m_max - center) * inv_extent;
+	m_aabb.min = (m_aabb.min - center) * inv_extent;
+	m_aabb.max = (m_aabb.max - center) * inv_extent;
 
-	spdlog::info("triangles normalized to ({}, {}, {}), ({}, {}, {})", m_aabb.m_min.x, m_aabb.m_min.y, m_aabb.m_min.z,
-	             m_aabb.m_max.x, m_aabb.m_max.y, m_aabb.m_max.z);
+	spdlog::info("triangles normalized to ({}, {}, {}), ({}, {}, {})", m_aabb.min.x, m_aabb.min.y, m_aabb.min.z,
+	             m_aabb.max.x, m_aabb.max.y, m_aabb.max.z);
 }

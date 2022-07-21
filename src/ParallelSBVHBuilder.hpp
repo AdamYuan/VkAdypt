@@ -4,7 +4,9 @@
 #include "AtomicAllocator.hpp"
 #include "BinaryBVH.hpp"
 #include <atomic>
+#include <cfloat>
 #include <concurrentqueue.h>
+#include <utility>
 
 class ParallelSBVHBuilder {
 private:
@@ -15,40 +17,73 @@ private:
 
 	struct Node {
 		AABB aabb;
-		uint32_t m_tri_index{};
 		Node *left{}, *right{};
-	};
+		uint32_t tri_idx{};
+	} m_root{};
 	AtomicAllocator<Node, kAllocatorChunkSize> m_node_allocator;
 
 	struct Reference {
-		AABB m_aabb;
-		uint32_t m_tri_index{};
+		AABB aabb;
+		uint32_t tri_idx{};
 	};
-	AtomicAllocator<Reference, kAllocatorChunkSize> m_reference_allocator;
 
+	template <uint32_t DIM> inline static bool reference_cmp(const Reference &l, const Reference &r);
+	template <uint32_t DIM> inline static void sort_references(std::vector<Reference> *references);
+	inline static void sort_references(std::vector<Reference> *references, uint32_t dim);
+	inline std::tuple<Reference, Reference> split_reference(const Reference &ref, uint32_t dim, float pos) const;
+
+	std::atomic_uint32_t m_node_count{};
 	struct Task {
 	private:
+		const ParallelSBVHBuilder *m_p_builder{};
 		Node *m_node{};
-		std::vector<Reference *> m_references;
+		std::vector<Reference> m_references;
+		uint32_t m_depth;
+
+		struct ObjectSplit {
+			AABB left_aabb, right_aabb;
+			uint32_t dim{}, left_num{};
+			float sah{FLT_MAX};
+		};
+		struct SpatialSplit {
+			uint32_t dim{};
+			float pos{}, sah{FLT_MAX};
+		};
+
+		template <uint32_t DIM> inline void _find_spatial_split_dim(SpatialSplit *p_ss);
+		inline SpatialSplit find_spatial_split();
+		inline std::tuple<Task, Task> perform_spatial_split(LocalAllocator<Node, kAllocatorChunkSize> *p_node_allocator,
+		                                                    const SpatialSplit &ss);
+
+		template <uint32_t DIM> inline void _find_object_split_dim(ObjectSplit *p_os);
+		inline ObjectSplit find_object_split();
+		inline std::tuple<Task, Task> perform_object_split(LocalAllocator<Node, kAllocatorChunkSize> *p_node_allocator,
+		                                                   const ObjectSplit &os);
+
+		inline void perform_leaf() { m_node->tri_idx = m_references.front().tri_idx; }
 
 	public:
 		inline Task() = default;
-		inline Task(Node *node, const std::vector<Reference *> &references) : m_node{node}, m_references{references} {}
-		inline Task(Node *node, std::vector<Reference *> &&references)
-		    : m_node{node}, m_references{std::move(references)} {}
+		inline Task(const ParallelSBVHBuilder *p_builder, Node *node, const std::vector<Reference> &references,
+		            uint32_t depth)
+		    : m_p_builder{p_builder}, m_node{node}, m_references{references}, m_depth{depth} {}
+		inline Task(const ParallelSBVHBuilder *p_builder, Node *node, std::vector<Reference> &&references,
+		            uint32_t depth)
+		    : m_p_builder{p_builder}, m_node{node}, m_references{std::move(references)}, m_depth{depth} {}
 		inline bool Empty() const { return !m_node; }
-		std::array<Task, 2> Run(LocalAllocator<Node, kAllocatorChunkSize> *p_node_allocator,
-		                        LocalAllocator<Reference, kAllocatorChunkSize> *p_reference_allocator);
+		std::tuple<Task, Task> Run(LocalAllocator<Node, kAllocatorChunkSize> *p_node_allocator);
 	};
 	moodycamel::ConcurrentQueue<Task> m_task_queue;
 	std::atomic_uint32_t m_task_count{};
 
-	void push_initial_task();
+	void push_root_task();
+	uint32_t fetch_result(Node *cur, std::vector<BinaryBVH::Node> *p_nodes, uint32_t *p_leaf_count);
 
 public:
 	ParallelSBVHBuilder(const BVHConfig &config, const Scene &scene)
 	    : m_scene(scene), m_config(config), m_min_overlap_area{scene.GetAABB().GetArea() * 1e-5f} {}
 	void Run();
+	void FetchResult(std::vector<BinaryBVH::Node> *p_nodes, uint32_t *p_leaf_count);
 };
 
 #endif

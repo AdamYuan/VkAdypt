@@ -178,6 +178,7 @@ uint32_t WideBVHBuilder::calculate_cost(uint32_t node_idx) {
 		} else
 			dp[i] = dp[i - 1];
 	}
+
 	return tri_count;
 }
 
@@ -259,12 +260,12 @@ void WideBVHBuilder::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx
 	glm::vec3 cell; // cell size
 	{
 		// fetch lo position
-		CUR.m_px = cur_box.m_min.x;
-		CUR.m_py = cur_box.m_min.y;
-		CUR.m_pz = cur_box.m_min.z;
+		CUR.m_px = cur_box.min.x;
+		CUR.m_py = cur_box.min.y;
+		CUR.m_pz = cur_box.min.z;
 
 		constexpr auto kBase = float(1.0 / double((1 << 8) - 1));
-		cell = (cur_box.m_max - cur_box.m_min) * kBase;
+		cell = (cur_box.max - cur_box.min) * kBase;
 
 		CUR.m_ex = cell.x == 0.0f ? 0u : (uint8_t)(127 + (int32_t)std::ceil(std::log2(cell.x)));
 		CUR.m_ey = cell.y == 0.0f ? 0u : (uint8_t)(127 + (int32_t)std::ceil(std::log2(cell.y)));
@@ -303,8 +304,8 @@ void WideBVHBuilder::create_nodes(uint32_t wbvh_node_idx, uint32_t sbvh_node_idx
 	for (uint32_t i = 0; i < 8; ++i) {
 		uint32_t sidx = ch_ranked_idx_arr[i];
 		if (~sidx) {
-			glm::uvec3 qlow = glm::floor((m_bin_bvh.GetAABB(sidx).m_min - cur_box.m_min) / cell);
-			glm::uvec3 qhigh = glm::ceil((m_bin_bvh.GetAABB(sidx).m_max - cur_box.m_min) / cell);
+			glm::uvec3 qlow = glm::floor((m_bin_bvh.GetAABB(sidx).min - cur_box.min) / cell);
+			glm::uvec3 qhigh = glm::ceil((m_bin_bvh.GetAABB(sidx).max - cur_box.min) / cell);
 			// TODO: cast NaN to uint ?
 			qlow = glm::min(qlow, glm::uvec3(UINT8_MAX));
 			qhigh = glm::min(qhigh, glm::uvec3(UINT8_MAX));

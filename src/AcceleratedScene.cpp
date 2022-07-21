@@ -25,7 +25,7 @@ std::vector<glm::vec4> AcceleratedScene::generate_bvh_tri_matrices(const std::sh
 	matrices.reserve(widebvh->GetTriIndices().size() * 3u);
 	for (uint32_t t : widebvh->GetTriIndices()) {
 		const Triangle &tri = widebvh->GetScenePtr()->GetTriangles()[t];
-		const glm::vec3 &v0 = tri.m_positions[0], &v1 = tri.m_positions[1], &v2 = tri.m_positions[2];
+		const glm::vec3 &v0 = tri.positions[0], &v1 = tri.positions[1], &v2 = tri.positions[2];
 		glm::vec4 c0{v0 - v2, 0.0f};
 		glm::vec4 c1{v1 - v2, 0.0f};
 		glm::vec4 c2{glm::cross(v0 - v2, v1 - v2), 0.0f};
