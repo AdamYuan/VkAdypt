@@ -2,10 +2,12 @@
 
 #include <future>
 #include <pdqsort.h>
+#include <queue>
 #include <spdlog/spdlog.h>
 
 void ParallelSBVHBuilder::Run() {
-	spdlog::info("Begin");
+	spdlog::info("Begin, threshold = {}", m_local_run_threshold);
+	auto begin = std::chrono::steady_clock::now();
 	push_root_task();
 	{
 		std::vector<std::future<void>> workers(std::thread::hardware_concurrency());
@@ -18,21 +20,38 @@ void ParallelSBVHBuilder::Run() {
 				Task task;
 				while (m_task_count.load()) {
 					if (m_task_queue.try_dequeue(consumer_token, task)) {
-						auto new_tasks = task.Run(&node_allocator);
-						if (std::get<0>(new_tasks).Empty()) {
+						if (task.GetReferenceCount() <= m_local_run_threshold) {
+							local_run_task(&node_allocator, std::move(task));
 							--m_task_count;
 						} else {
-							++m_task_count;
-							m_node_count.fetch_add(2);
-							m_task_queue.enqueue(producer_token, std::get<0>(new_tasks));
-							m_task_queue.enqueue(producer_token, std::get<1>(new_tasks));
+							auto new_tasks = task.Run(&node_allocator);
+							if (Task::PairEmpty(new_tasks)) {
+								--m_task_count;
+							} else {
+								++m_task_count;
+								m_node_count.fetch_add(2);
+								m_task_queue.enqueue(producer_token, std::move(std::get<1>(new_tasks)));
+								m_task_queue.enqueue(producer_token, std::move(std::get<0>(new_tasks)));
+							}
 						}
 					}
 				}
 			});
 		}
 	}
-	spdlog::info("End");
+	spdlog::info(
+	    "End {} ms",
+	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count());
+}
+
+void ParallelSBVHBuilder::local_run_task(LocalAllocator<Node, kAllocatorChunkSize> *p_node_allocator,
+                                         ParallelSBVHBuilder::Task &&task) {
+	auto new_tasks = task.Run(p_node_allocator);
+	if (!Task::PairEmpty(new_tasks)) {
+		m_node_count.fetch_add(2);
+		local_run_task(p_node_allocator, std::move(std::get<1>(new_tasks)));
+		local_run_task(p_node_allocator, std::move(std::get<0>(new_tasks)));
+	}
 }
 
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
@@ -52,9 +71,8 @@ ParallelSBVHBuilder::Task::Run(LocalAllocator<Node, kAllocatorChunkSize> *p_node
 	}
 	if (spatial_split.sah < object_split.sah) {
 		auto ret = perform_spatial_split(p_node_allocator, spatial_split);
-		if (!std::get<0>(ret).Empty()) {
+		if (!PairEmpty(ret))
 			return ret;
-		}
 	}
 	return perform_object_split(p_node_allocator, object_split);
 }
@@ -77,15 +95,10 @@ void ParallelSBVHBuilder::push_root_task() {
 }
 
 template <uint32_t DIM> bool ParallelSBVHBuilder::reference_cmp(const Reference &l, const Reference &r) {
-	float lc = l.aabb.GetCenter()[DIM], rc = r.aabb.GetCenter()[DIM];
-	return std::tie(lc, l.tri_idx) < std::tie(rc, r.tri_idx);
+	return l.aabb.GetDimCenter<DIM>() < r.aabb.GetDimCenter<DIM>();
 }
 template <uint32_t DIM> void ParallelSBVHBuilder::sort_references(std::vector<Reference> *references) {
-	pdqsort(references->begin(), references->end(), reference_cmp<DIM>);
-}
-void ParallelSBVHBuilder::sort_references(std::vector<Reference> *references, uint32_t dim) {
-	pdqsort(references->begin(), references->end(),
-	        dim != 0 ? (dim == 1 ? reference_cmp<1> : reference_cmp<2>) : reference_cmp<0>);
+	pdqsort_branchless(references->begin(), references->end(), reference_cmp<DIM>);
 }
 
 std::tuple<ParallelSBVHBuilder::Reference, ParallelSBVHBuilder::Reference>
@@ -313,7 +326,9 @@ void ParallelSBVHBuilder::Task::_find_object_split_dim(ParallelSBVHBuilder::Task
 		float sah = float(i) * left_aabb.GetArea() + float(m_references.size() - i) * right_aabbs[i].GetArea();
 		if (sah < p_os->sah) {
 			p_os->dim = DIM;
-			p_os->left_num = i;
+			// p_os->left_num = i;
+			p_os->pos =
+			    (m_references[i - 1].aabb.GetDimCenter<DIM>() + m_references[i].aabb.GetDimCenter<DIM>()) * 0.5f;
 			p_os->left_aabb = left_aabb;
 			p_os->right_aabb = right_aabbs[i];
 			p_os->sah = sah;
@@ -332,20 +347,60 @@ ParallelSBVHBuilder::Task::ObjectSplit ParallelSBVHBuilder::Task::find_object_sp
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
 ParallelSBVHBuilder::Task::perform_object_split(LocalAllocator<Node, kAllocatorChunkSize> *p_node_allocator,
                                                 const ParallelSBVHBuilder::Task::ObjectSplit &os) {
-	sort_references(&m_references, os.dim);
-
 	if (!m_node->left)
 		m_node->left = p_node_allocator->Alloc();
 	if (!m_node->right)
 		m_node->right = p_node_allocator->Alloc();
 
 	auto &left = m_node->left, &right = m_node->right;
-	left->aabb = os.left_aabb;
-	right->aabb = os.right_aabb;
+	left->aabb = right->aabb = AABB();
+
+	// separate the bound into 3 parts
+	//[left_begin, left_end) - totally left part
+	//[left_end, right_begin) - the part to determined
+	//[right_begin, right_end) - totally right part
+	const uint32_t left_begin = 0, right_end = m_references.size();
+	uint32_t left_end = 0, right_begin = m_references.size();
+	for (uint32_t i = left_begin; i < right_begin; ++i) {
+		// put to left
+		const auto &ref = m_references[i];
+		float c = ref.aabb.GetDimCenter((int)os.dim);
+		if (c < os.pos) {
+			left->aabb.Expand(ref.aabb);
+			std::swap(m_references[i], m_references[left_end++]);
+		} else if (c > os.pos) {
+			right->aabb.Expand(ref.aabb);
+			std::swap(m_references[i--], m_references[--right_begin]);
+		}
+	}
+
+	if ((left_begin == left_end || right_begin == right_end) && left_end == right_begin) {
+		spdlog::error("Error 1 in object split");
+	}
+
+	while (left_end < right_begin) {
+		AABB lb = AABB{left->aabb, m_references[left_end].aabb};
+		AABB rb = AABB{right->aabb, m_references[left_end].aabb};
+
+		float left_sah =
+		    lb.GetArea() * float(1 + left_end - left_begin) + right->aabb.GetArea() * float(right_end - right_begin);
+		float right_sah =
+		    left->aabb.GetArea() * float(left_end - left_begin) + rb.GetArea() * float(1 + right_end - right_begin);
+
+		if (left_sah < right_sah || left_begin == left_end) { // unsplit to left
+			left->aabb = lb;
+			++left_end;
+		} else {
+			right->aabb = rb;
+			std::swap(m_references[left_end], m_references[--right_begin]);
+		}
+	}
+
+	assert(left_begin < left_end && right_begin < right_end);
 
 	std::vector<Reference> &left_refs = m_references;
-	std::vector<Reference> right_refs{m_references.begin() + os.left_num, m_references.end()};
-	left_refs.resize(os.left_num);
+	std::vector<Reference> right_refs{m_references.begin() + right_begin, m_references.begin() + right_end};
+	left_refs.resize(left_end - left_begin);
 	left_refs.shrink_to_fit();
 
 	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1},
