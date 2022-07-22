@@ -59,7 +59,7 @@ add_executable(Adypt
         src/Shape.hpp
         src/Scene.hpp
         src/Scene.cpp
-        src/AtomicAllocator.hpp)
+        src/ParallelSort.hpp)
 
 # find_package(OpenMP)
 # if(OpenMP_CXX_FOUND)

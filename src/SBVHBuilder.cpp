@@ -5,20 +5,31 @@
 #include <pdqsort.h>
 #include <spdlog/spdlog.h>
 
+#define PARALLEL_SORTER pdqsort_branchless
+#include "ParallelSort.hpp"
+
 template <uint32_t DIM>
 bool SBVHBuilder::reference_cmp(const SBVHBuilder::Reference &l, const SBVHBuilder::Reference &r) {
-	float lc = l.m_aabb.GetCenter()[DIM], rc = r.m_aabb.GetCenter()[DIM];
-	return std::tie(lc, l.m_tri_index) < std::tie(rc, r.m_tri_index);
+	return l.m_aabb.GetDimCenter<DIM>() < r.m_aabb.GetDimCenter<DIM>();
 }
 
 template <uint32_t DIM> void SBVHBuilder::sort_spec(const SBVHBuilder::NodeSpec &t_spec) {
-	pdqsort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
-	        reference_cmp<DIM>);
+	if (t_spec.m_ref_num >= 32768)
+		ParallelSort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
+		             reference_cmp<DIM>, std::thread::hardware_concurrency());
+	else
+		pdqsort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
+		        reference_cmp<DIM>);
 }
 
 void SBVHBuilder::sort_spec(const SBVHBuilder::NodeSpec &t_spec, uint32_t dim) {
-	pdqsort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
-	        dim != 0 ? (dim == 1 ? reference_cmp<1> : reference_cmp<2>) : reference_cmp<0>);
+	if (t_spec.m_ref_num >= 32768)
+		ParallelSort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
+		             dim != 0 ? (dim == 1 ? reference_cmp<1> : reference_cmp<2>) : reference_cmp<0>,
+		             std::thread::hardware_concurrency());
+	else
+		pdqsort(m_refstack.data() + m_refstack.size() - t_spec.m_ref_num, m_refstack.data() + m_refstack.size(),
+		        dim != 0 ? (dim == 1 ? reference_cmp<1> : reference_cmp<2>) : reference_cmp<0>);
 }
 
 uint32_t SBVHBuilder::build_leaf(const SBVHBuilder::NodeSpec &t_spec) {
@@ -44,12 +55,12 @@ void SBVHBuilder::_find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, SB
 	AABB left_aabb = refs->m_aabb;
 	for (uint32_t i = 1; i <= t_spec.m_ref_num - 1; ++i) {
 		float sah = float(i) * left_aabb.GetArea() + float(t_spec.m_ref_num - i) * m_right_aabbs[i].GetArea();
-		if (sah < t_os->m_sah) {
-			t_os->m_dim = DIM;
-			t_os->m_left_num = i;
-			t_os->m_left_aabb = left_aabb;
-			t_os->m_right_aabb = m_right_aabbs[i];
-			t_os->m_sah = sah;
+		if (sah < t_os->sah) {
+			t_os->dim = DIM;
+			t_os->pos = (refs[i - 1].m_aabb.GetDimCenter<DIM>() + refs[i].m_aabb.GetDimCenter<DIM>()) * 0.5f;
+			t_os->left_aabb = left_aabb;
+			t_os->right_aabb = m_right_aabbs[i];
+			t_os->sah = sah;
 		}
 
 		left_aabb.Expand(refs[i].m_aabb);
@@ -57,7 +68,7 @@ void SBVHBuilder::_find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, SB
 }
 
 void SBVHBuilder::find_object_split(const SBVHBuilder::NodeSpec &t_spec, SBVHBuilder::ObjectSplit *t_os) {
-	t_os->m_sah = FLT_MAX;
+	t_os->sah = FLT_MAX;
 
 	_find_object_split_dim<0>(t_spec, t_os);
 	_find_object_split_dim<1>(t_spec, t_os);
@@ -221,13 +232,46 @@ void SBVHBuilder::perform_spatial_split(const SBVHBuilder::NodeSpec &t_spec, con
 
 void SBVHBuilder::perform_object_split(const SBVHBuilder::NodeSpec &t_spec, const SBVHBuilder::ObjectSplit &t_os,
                                        SBVHBuilder::NodeSpec *t_left, SBVHBuilder::NodeSpec *t_right) {
-	sort_spec(t_spec, t_os.m_dim);
+	t_left->m_aabb = t_right->m_aabb = AABB{};
 
-	t_left->m_ref_num = t_os.m_left_num;
-	t_left->m_aabb = t_os.m_left_aabb;
+	uint32_t refs = get_ref_index(t_spec);
 
-	t_right->m_ref_num = t_spec.m_ref_num - t_os.m_left_num;
-	t_right->m_aabb = t_os.m_right_aabb;
+	// separate the bound into 3 parts
+	//[left_begin, left_end) - totally left part
+	//[left_end, right_begin) - the part to determined
+	//[right_begin, right_end) - totally right part
+	const uint32_t left_begin = 0, right_end = t_spec.m_ref_num;
+	uint32_t left_end = 0, right_begin = t_spec.m_ref_num;
+	for (uint32_t i = left_begin; i < right_begin; ++i) {
+		float c = m_refstack[refs + i].m_aabb.GetDimCenter((int)t_os.dim);
+		if (c < t_os.pos) {
+			t_left->m_aabb.Expand(m_refstack[refs + i].m_aabb);
+			std::swap(m_refstack[refs + i], m_refstack[refs + (left_end++)]);
+		} else if (c > t_os.pos) {
+			t_right->m_aabb.Expand(m_refstack[refs + i].m_aabb);
+			std::swap(m_refstack[refs + (i--)], m_refstack[refs + (--right_begin)]);
+		}
+	}
+
+	while (left_end < right_begin) {
+		AABB lb = AABB{t_left->m_aabb, m_refstack[refs + left_end].m_aabb};
+		AABB rb = AABB{t_right->m_aabb, m_refstack[refs + left_end].m_aabb};
+
+		float left_sah = lb.GetArea() * float(1 + left_end - left_begin) +
+		                 t_right->m_aabb.GetArea() * float(right_end - right_begin);
+		float right_sah =
+		    t_left->m_aabb.GetArea() * float(left_end - left_begin) + rb.GetArea() * float(1 + right_end - right_begin);
+
+		if (left_sah < right_sah || left_begin == left_end) { // unsplit to left
+			t_left->m_aabb = lb;
+			++left_end;
+		} else {
+			t_right->m_aabb = rb;
+			std::swap(m_refstack[refs + left_end], m_refstack[refs + (--right_begin)]);
+		}
+	}
+	t_left->m_ref_num = left_end - left_begin;
+	t_right->m_ref_num = right_end - right_begin;
 }
 
 uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
@@ -240,8 +284,8 @@ uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 	SpatialSplit spatial_split{};
 	spatial_split.m_sah = FLT_MAX;
 	if (t_depth <= m_config.m_max_spatial_depth) {
-		AABB overlap = object_split.m_left_aabb;
-		overlap.IntersectAABB(object_split.m_right_aabb);
+		AABB overlap = object_split.left_aabb;
+		overlap.IntersectAABB(object_split.right_aabb);
 		if (overlap.GetArea() >= m_min_overlap_area)
 			find_spatial_split(t_spec, &spatial_split);
 	}
@@ -251,7 +295,7 @@ uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 
 	NodeSpec left, right;
 	left.m_ref_num = right.m_ref_num = 0;
-	if (spatial_split.m_sah < object_split.m_sah)
+	if (spatial_split.m_sah < object_split.sah)
 		perform_spatial_split(t_spec, spatial_split, &left, &right);
 
 	if (left.m_ref_num == 0 || right.m_ref_num == 0)

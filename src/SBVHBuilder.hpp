@@ -20,9 +20,9 @@ private:
 		uint32_t m_ref_num{};
 	};
 	struct ObjectSplit {
-		AABB m_left_aabb, m_right_aabb;
-		uint32_t m_dim{}, m_left_num{};
-		float m_sah{};
+		AABB left_aabb, right_aabb;
+		uint32_t dim{};
+		float pos{}, sah{FLT_MAX};
 	};
 	struct SpatialSplit {
 		uint32_t m_dim;
