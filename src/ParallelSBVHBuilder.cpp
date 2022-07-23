@@ -239,9 +239,10 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_spatial_split_dim(
 inline std::array<std::array<ParallelSBVHBuilder::Task::SpatialBin, ParallelSBVHBuilder::kSpatialBinNum>, 3>
 ParallelSBVHBuilder::Task::_compute_spatial_bins_parallel(std::atomic_uint32_t *counter, const glm::vec3 &bin_bases,
                                                           const glm::vec3 &bin_widths) {
-	const glm::vec3 inv_bin_widths = 1.0f / bin_widths;
 	std::array<std::array<ParallelSBVHBuilder::Task::SpatialBin, ParallelSBVHBuilder::kSpatialBinNum>, 3> ret{};
-	for (uint32_t cur = (*counter)++; cur < m_references.size(); cur = (*counter++)) {
+
+	const glm::vec3 inv_bin_widths = 1.0f / bin_widths;
+	for (uint32_t cur = (*counter)++; cur < m_references.size(); cur = (*counter)++) {
 		const auto &ref = m_references[cur];
 		glm::u32vec3 bins =
 		    glm::clamp(glm::u32vec3((ref.aabb.min - bin_bases) * inv_bin_widths), 0u, kSpatialBinNum - 1);
@@ -252,7 +253,7 @@ ParallelSBVHBuilder::Task::_compute_spatial_bins_parallel(std::atomic_uint32_t *
 			uint32_t bin = bins[dim], last_bin = last_bins[dim];
 			auto &spatial_bins = ret[dim];
 
-			spatial_bins[bin].in++;
+			++spatial_bins[bin].in;
 			Reference cur_ref = ref;
 			for (; bin < last_bin; ++bin) {
 				auto [left_ref, right_ref] =
@@ -261,7 +262,7 @@ ParallelSBVHBuilder::Task::_compute_spatial_bins_parallel(std::atomic_uint32_t *
 				cur_ref = right_ref;
 			}
 			spatial_bins[last_bin].aabb.Expand(cur_ref.aabb);
-			spatial_bins[last_bin].out++;
+			++spatial_bins[last_bin].out;
 		}
 	}
 
@@ -280,8 +281,8 @@ void ParallelSBVHBuilder::Task::_merge_spatial_bins(std::array<std::array<Spatia
 	}
 }
 void ParallelSBVHBuilder::Task::_find_spatial_split_parallel(ParallelSBVHBuilder::Task::SpatialSplit *p_ss) {
-	const glm::vec3 bin_widths = m_node->aabb.GetExtent() / (float)kObjectBinNum;
 	const glm::vec3 &bin_bases = m_node->aabb.min;
+	const glm::vec3 bin_widths = m_node->aabb.GetExtent() / (float)kObjectBinNum;
 
 	std::atomic_uint32_t counter{0};
 	std::vector<std::future<std::array<std::array<SpatialBin, kSpatialBinNum>, 3>>> futures(m_thread_count - 1);
