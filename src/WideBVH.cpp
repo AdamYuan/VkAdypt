@@ -162,6 +162,8 @@ uint32_t WideBVHBuilder::calculate_cost(uint32_t node_idx) {
 		}
 	}
 
+	float min_sah = dp[1].m_sah;
+
 	for (uint32_t i = 2; i <= 7; ++i) {
 		float c_distribute = FLT_MAX;
 		for (uint32_t k = 1; k < i; ++k) {
@@ -177,7 +179,12 @@ uint32_t WideBVHBuilder::calculate_cost(uint32_t node_idx) {
 			dp[i].m_type = NodeCost::kDistribute;
 		} else
 			dp[i] = dp[i - 1];
+
+		min_sah = std::min(min_sah, dp[i].m_sah);
 	}
+
+	if (node_idx == 0)
+		spdlog::info("Root SAH = {}", min_sah);
 
 	return tri_count;
 }
