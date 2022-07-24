@@ -66,6 +66,7 @@ void ParallelSBVHBuilder::Task::BlockRun() {
 		// Subdivide the thread
 		auto future = std::get<1>(new_tasks).AsyncRun();
 		std::get<0>(new_tasks).BlockRun();
+		future.get();
 	} else {
 		// Begin task pool
 		// spdlog::info("Thread pool");
