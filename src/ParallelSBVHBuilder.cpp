@@ -7,11 +7,11 @@
 #include <spdlog/spdlog.h>
 
 void ParallelSBVHBuilder::Run() {
-	if (std::thread::hardware_concurrency() > 1)
-		m_thread_group = std::make_unique<ThreadUnit[]>(std::thread::hardware_concurrency() - 1);
-	m_consumer_tokens.reserve(std::thread::hardware_concurrency());
-	m_producer_tokens.reserve(std::thread::hardware_concurrency());
-	for (uint32_t i = 0; i < std::thread::hardware_concurrency(); ++i) {
+	if (kThreadCount > 1)
+		m_thread_group = std::make_unique<ThreadUnit[]>(kThreadCount - 1);
+	m_consumer_tokens.reserve(kThreadCount);
+	m_producer_tokens.reserve(kThreadCount);
+	for (uint32_t i = 0; i < kThreadCount; ++i) {
 		m_consumer_tokens.emplace_back(m_task_queue);
 		m_producer_tokens.emplace_back(m_task_queue);
 	}
@@ -36,7 +36,7 @@ ParallelSBVHBuilder::Task ParallelSBVHBuilder::get_root_task() {
 			references.push_back(ref);
 		}
 	}
-	return Task{this, &m_root, std::move(references), 0, 0, std::thread::hardware_concurrency()};
+	return Task{this, &m_root, std::move(references), 0, 0, kThreadCount};
 }
 
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBuilder::Task::Run() {
@@ -63,10 +63,9 @@ std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBui
 
 void ParallelSBVHBuilder::Task::BlockRun() {
 	auto [left_task, right_task] = Run();
-	if (left_task.Empty()) // Leaf
-		return;
-
 	if (m_thread_count > 1) {
+		if (left_task.Empty()) // Leaf
+			return;
 		if (left_task.m_thread_count == 0) {
 			++m_p_builder->m_task_count;
 			m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(left_task));
@@ -79,13 +78,15 @@ void ParallelSBVHBuilder::Task::BlockRun() {
 			// Subdivide the thread
 			auto future = right_task.AsyncRun();
 			left_task.BlockRun();
-			future.get();
+			future.wait();
 		}
 	} else if (m_thread_count == 1) {
 		// Begin task pool
-		m_p_builder->m_task_count.fetch_add(2);
-		m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(left_task));
-		m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(right_task));
+		if (!left_task.Empty()) {
+			m_p_builder->m_task_count.fetch_add(2);
+			m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(left_task));
+			m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(right_task));
+		}
 
 		Task task;
 		while (m_p_builder->m_task_count.load()) {

@@ -13,6 +13,7 @@
 
 class ParallelSBVHBuilder {
 private:
+	const uint32_t kThreadCount;
 	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
 	static constexpr uint32_t kParallelForBlockSize = 64;
 	static constexpr uint32_t kLocalRunThreshold = 512;
@@ -171,7 +172,8 @@ private:
 
 public:
 	ParallelSBVHBuilder(const BVHConfig &config, const Scene &scene)
-	    : m_scene(scene), m_config(config), m_min_overlap_area{scene.GetAABB().GetArea() * 1e-5f} {}
+	    : kThreadCount(std::max(1u, std::thread::hardware_concurrency())), m_scene(scene),
+	      m_config(config), m_min_overlap_area{scene.GetAABB().GetArea() * 1e-5f} {}
 	void Run();
 	void FetchResult(std::vector<BinaryBVH::Node> *p_nodes, uint32_t *p_leaf_count);
 };
