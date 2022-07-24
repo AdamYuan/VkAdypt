@@ -238,7 +238,7 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_spatial_split_dim(
 }
 void ParallelSBVHBuilder::Task::_find_spatial_split_parallel(ParallelSBVHBuilder::Task::SpatialSplit *p_ss) {
 	const glm::vec3 &bin_bases = m_node->aabb.min;
-	const glm::vec3 bin_widths = m_node->aabb.GetExtent() / (float)kObjectBinNum, inv_bin_widths = 1.0f / bin_widths;
+	const glm::vec3 bin_widths = m_node->aabb.GetExtent() / (float)kSpatialBinNum, inv_bin_widths = 1.0f / bin_widths;
 	std::atomic_uint32_t counter{0};
 
 	auto compute_spatial_bins_func = [this, &bin_bases, &bin_widths, &inv_bin_widths, &counter]() {
@@ -410,7 +410,6 @@ ParallelSBVHBuilder::Task::perform_spatial_split(const SpatialSplit &ss) {
 	std::vector<Reference> &left_refs = m_references;
 	std::vector<Reference> right_refs{m_references.begin() + right_begin, m_references.begin() + right_end};
 	left_refs.resize(left_end - left_begin);
-	left_refs.shrink_to_fit();
 
 	auto [left_thread_count, right_thread_count] = get_thread_counts(left_refs.size(), right_refs.size());
 	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
@@ -500,56 +499,116 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_object_split_binne
 	}
 }
 void ParallelSBVHBuilder::Task::_find_object_split_binned_parallel(ObjectSplit *p_os) {
-	/* thread_local ObjectBin object_bins[kObjectBinNum];
-	thread_local AABB right_aabbs[kObjectBinNum];
-
-	std::fill(object_bins, object_bins + kObjectBinNum, ObjectBin{AABB(), 0}); // initialize bins
-	const glm::vec3 bin_width = m_node->aabb.GetExtent() / (float)kObjectBinNum, inv_bin_width = 1.0f / bin_width;
-	const glm::vec3 &bound_base = m_node->aabb.min;
-
-	// Put references into bins according to centers
-	for (const auto &ref : m_references) {
-	    uint32_t bin =
-	        glm::clamp(uint32_t((ref.aabb.GetDimCenter<DIM>() - bound_base) * inv_bin_width), 0u, kObjectBinNum -
-	1); object_bins[bin].aabb.Expand(ref.aabb);
-	    ++object_bins[bin].cnt;
+	AABB center_bound;
+	{ // Parallel compute center bound
+		std::atomic_uint32_t counter{0};
+		auto compute_center_bound_func = [this, &counter]() {
+			AABB ret{};
+			for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_references.size();
+			     cur_block = counter++) {
+				uint32_t cur_first = cur_block * kParallelForBlockSize,
+				         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, (uint32_t)m_references.size());
+				for (uint32_t cur = cur_first; cur < cur_last; ++cur) {
+					const auto &ref = m_references[cur];
+					ret.Expand(ref.aabb.GetCenter());
+				}
+			}
+			return ret;
+		};
+		std::vector<std::future<AABB>> futures(m_thread_count - 1);
+		for (uint32_t i = 1; i < m_thread_count; ++i)
+			futures[i - 1] = get_thread_unit(i).Push(compute_center_bound_func);
+		center_bound = compute_center_bound_func();
+		for (auto &f : futures)
+			center_bound.Expand(f.get());
 	}
 
-	// Compute the AABBs from right
-	right_aabbs[kObjectBinNum - 1] = object_bins[kObjectBinNum - 1].aabb;
-	for (int32_t i = kObjectBinNum - 2; i >= 1; --i)
-	    right_aabbs[i] = AABB(object_bins[i].aabb, right_aabbs[i + 1]);
+	const glm::vec3 &bin_bases = center_bound.min;
+	const glm::vec3 bin_widths = center_bound.GetExtent() / (float)kObjectBinNum, inv_bin_widths = 1.0f / bin_widths;
 
-	// Find optimal object split
-	AABB left_aabb = object_bins[0].aabb;
-	uint32_t left_num = 0;
-	for (uint32_t i = 1; i < kObjectBinNum; ++i) {
-	    left_num += object_bins[i - 1].cnt;
-	    uint32_t right_num = m_references.size() - left_num;
+	std::atomic_uint32_t counter{0};
+	auto compute_object_bins_func = [this, &bin_bases, &bin_widths, &inv_bin_widths, &counter]() {
+		std::array<std::array<ObjectBin, kObjectBinNum>, 3> ret{};
 
-	    float sah = float(left_num) * left_aabb.GetArea() + float(right_num) * right_aabbs[i].GetArea();
-	    if (sah < p_os->sah && left_num > 0 && right_num > 0) {
-	        p_os->left_aabb = left_aabb;
-	        p_os->right_aabb = right_aabbs[i];
-	        p_os->sah = sah;
-	        p_os->dim = DIM;
-	        p_os->pos = bound_base + float(i) * bin_width;
-	        p_os->use_bin = true;
-	    }
+		for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_references.size();
+		     cur_block = counter++) {
+			uint32_t cur_first = cur_block * kParallelForBlockSize,
+			         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, (uint32_t)m_references.size());
 
-	    left_aabb.Expand(object_bins[i].aabb);
-	} */
+			for (uint32_t cur = cur_first; cur < cur_last; ++cur) {
+				const auto &ref = m_references[cur];
+				glm::u32vec3 bins = glm::clamp(glm::u32vec3((ref.aabb.GetCenter() - bin_bases) * inv_bin_widths), 0u,
+				                               kObjectBinNum - 1);
+				for (int dim = 0; dim < 3; ++dim) {
+					auto &object_bins = ret[dim];
+					uint32_t bin = bins[dim];
+
+					++object_bins[bin].cnt;
+					object_bins[bin].aabb.Expand(ref.aabb);
+				}
+			}
+		}
+		return ret;
+	};
+
+	// Async compute bins
+	std::vector<std::future<std::array<std::array<ObjectBin, kObjectBinNum>, 3>>> futures(m_thread_count - 1);
+	for (uint32_t i = 1; i < m_thread_count; ++i)
+		futures[i - 1] = get_thread_unit(i).Push(compute_object_bins_func);
+	auto bins = compute_object_bins_func();
+
+	// Merge Bins
+	for (auto &f : futures) {
+		auto r = f.get();
+		for (int dim = 0; dim < 3; ++dim) {
+			for (uint32_t x = 0; x < kObjectBinNum; ++x) {
+				auto &cl = bins[dim][x];
+				const auto &cr = r[dim][x];
+				cl.aabb.Expand(cr.aabb);
+				cl.cnt += cr.cnt;
+			}
+		}
+	}
+
+	thread_local AABB right_aabbs[kObjectBinNum];
+	for (int dim = 0; dim < 3; ++dim) {
+		const auto &dim_bins = bins[dim];
+
+		right_aabbs[kObjectBinNum - 1] = dim_bins[kObjectBinNum - 1].aabb;
+		for (int32_t i = kObjectBinNum - 2; i >= 1; --i)
+			right_aabbs[i] = AABB(dim_bins[i].aabb, right_aabbs[i + 1]);
+
+		// Find optimal object split
+		AABB left_aabb = dim_bins[0].aabb;
+		uint32_t left_num = 0;
+		for (uint32_t i = 1; i < kObjectBinNum; ++i) {
+			left_num += dim_bins[i - 1].cnt;
+			uint32_t right_num = m_references.size() - left_num;
+
+			float sah = float(left_num) * left_aabb.GetArea() + float(right_num) * right_aabbs[i].GetArea();
+			if (sah < p_os->sah && left_num > 0 && right_num > 0) {
+				p_os->left_aabb = left_aabb;
+				p_os->right_aabb = right_aabbs[i];
+				p_os->sah = sah;
+				p_os->dim = dim;
+				p_os->pos = bin_bases[dim] + float(i) * bin_widths[dim];
+				p_os->bin_width = bin_widths[dim];
+			}
+
+			left_aabb.Expand(dim_bins[i].aabb);
+		}
+	}
 }
 ParallelSBVHBuilder::Task::ObjectSplit ParallelSBVHBuilder::Task::find_object_split() {
 	ObjectSplit os{};
-	/*if (m_thread_count == 1) {
-	    _find_object_split_dim<0>(&os);
-	    _find_object_split_dim<1>(&os);
-	    _find_object_split_dim<2>(&os);*/
-	if (m_references.size() >= kObjectBinNum || m_thread_count > 1) {
-		_find_object_split_binned_dim<0>(&os);
-		_find_object_split_binned_dim<1>(&os);
-		_find_object_split_binned_dim<2>(&os);
+	if (m_references.size() >= kObjectBinNum) {
+		if (m_thread_count > 1)
+			_find_object_split_binned_parallel(&os);
+		else {
+			_find_object_split_binned_dim<0>(&os);
+			_find_object_split_binned_dim<1>(&os);
+			_find_object_split_binned_dim<2>(&os);
+		}
 	}
 	// Fallback to sweep SAH if failed
 	if (os.sah == FLT_MAX) {
@@ -616,7 +675,6 @@ ParallelSBVHBuilder::Task::perform_object_split(const ObjectSplit &os) {
 	std::vector<Reference> &left_refs = m_references;
 	std::vector<Reference> right_refs{m_references.begin() + right_begin, m_references.begin() + right_end};
 	left_refs.resize(left_end - left_begin);
-	left_refs.shrink_to_fit();
 
 	auto [left_thread_count, right_thread_count] = get_thread_counts(left_refs.size(), right_refs.size());
 	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
