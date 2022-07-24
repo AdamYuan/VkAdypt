@@ -7,10 +7,17 @@
 #include <spdlog/spdlog.h>
 
 void ParallelSBVHBuilder::Run() {
-	spdlog::info("Begin, threshold = {}", kLocalRunThreshold);
-	auto begin = std::chrono::steady_clock::now();
 	if (std::thread::hardware_concurrency() > 1)
 		m_thread_group = std::make_unique<ThreadUnit[]>(std::thread::hardware_concurrency() - 1);
+	m_consumer_tokens.reserve(std::thread::hardware_concurrency());
+	m_producer_tokens.reserve(std::thread::hardware_concurrency());
+	for (uint32_t i = 0; i < std::thread::hardware_concurrency(); ++i) {
+		m_consumer_tokens.emplace_back(m_task_queue);
+		m_producer_tokens.emplace_back(m_task_queue);
+	}
+
+	spdlog::info("Begin, threshold = {}", kLocalRunThreshold);
+	auto begin = std::chrono::steady_clock::now();
 	get_root_task().BlockRun();
 	spdlog::info(
 	    "End {} ms",
@@ -33,9 +40,6 @@ ParallelSBVHBuilder::Task ParallelSBVHBuilder::get_root_task() {
 }
 
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBuilder::Task::Run() {
-	/* if (m_thread_count > 1) {
-	    spdlog::info("Thread count = {}", m_thread_count);
-	} */
 	if (m_references.size() == 1) {
 		perform_leaf();
 		return {};
@@ -58,39 +62,47 @@ std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBui
 }
 
 void ParallelSBVHBuilder::Task::BlockRun() {
-	auto new_tasks = Run();
-	if (PairEmpty(new_tasks))
+	auto [left_task, right_task] = Run();
+	if (left_task.Empty()) // Leaf
 		return;
 
 	if (m_thread_count > 1) {
-		// Subdivide the thread
-		auto future = std::get<1>(new_tasks).AsyncRun();
-		std::get<0>(new_tasks).BlockRun();
-		future.get();
-	} else {
+		if (left_task.m_thread_count == 0) {
+			++m_p_builder->m_task_count;
+			m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(left_task));
+			right_task.BlockRun();
+		} else if (right_task.m_thread_count == 0) {
+			++m_p_builder->m_task_count;
+			m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(right_task));
+			left_task.BlockRun();
+		} else {
+			// Subdivide the thread
+			auto future = right_task.AsyncRun();
+			left_task.BlockRun();
+			future.get();
+		}
+	} else if (m_thread_count == 1) {
 		// Begin task pool
-		// spdlog::info("Thread pool");
-		moodycamel::ConsumerToken consumer_token{m_p_builder->m_task_queue};
-		moodycamel::ProducerToken producer_token{m_p_builder->m_task_queue};
-
 		m_p_builder->m_task_count.fetch_add(2);
-		m_p_builder->m_task_queue.enqueue(producer_token, std::move(std::get<1>(new_tasks)));
-		m_p_builder->m_task_queue.enqueue(producer_token, std::move(std::get<0>(new_tasks)));
+		m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(left_task));
+		m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(right_task));
 
 		Task task;
 		while (m_p_builder->m_task_count.load()) {
-			if (m_p_builder->m_task_queue.try_dequeue(consumer_token, task)) {
+			if (m_p_builder->m_task_queue.try_dequeue(get_queue_consumer_token(), task)) {
 				if (task.m_references.size() <= kLocalRunThreshold) {
 					task.LocalRun();
 					--m_p_builder->m_task_count;
 				} else {
-					new_tasks = task.Run();
+					auto new_tasks = task.Run();
 					if (Task::PairEmpty(new_tasks)) {
 						--m_p_builder->m_task_count;
 					} else {
 						++m_p_builder->m_task_count;
-						m_p_builder->m_task_queue.enqueue(producer_token, std::move(std::get<1>(new_tasks)));
-						m_p_builder->m_task_queue.enqueue(producer_token, std::move(std::get<0>(new_tasks)));
+						m_p_builder->m_task_queue.enqueue(get_queue_producer_token(),
+						                                  std::move(std::get<1>(new_tasks)));
+						m_p_builder->m_task_queue.enqueue(get_queue_producer_token(),
+						                                  std::move(std::get<0>(new_tasks)));
 					}
 				}
 			}
@@ -178,12 +190,12 @@ void ParallelSBVHBuilder::FetchResult(std::vector<BinaryBVH::Node> *p_nodes, uin
 	spdlog::info("Leaf count: {}", *p_leaf_count);
 }
 
-std::tuple<uint32_t, uint32_t> ParallelSBVHBuilder::Task::get_thread_counts(uint32_t left_ref_count,
-                                                                            uint32_t right_ref_count) const {
-	if (m_thread_count == 1)
-		return {1u, 1u};
+std::tuple<uint32_t, uint32_t> ParallelSBVHBuilder::Task::get_child_thread_counts(uint32_t left_ref_count,
+                                                                                  uint32_t right_ref_count) const {
+	if (m_thread_count == 0)
+		return {0u, 0u};
 	auto lt = (float)left_ref_count, tt = float(left_ref_count + right_ref_count);
-	auto lc = std::clamp(uint32_t(glm::round(lt / tt * float(m_thread_count))), 1u, m_thread_count - 1u);
+	auto lc = std::clamp(uint32_t(glm::round(lt / tt * float(m_thread_count))), 0u, m_thread_count);
 	return {lc, m_thread_count - lc};
 }
 /*
@@ -325,12 +337,12 @@ void ParallelSBVHBuilder::Task::_find_spatial_split_parallel(ParallelSBVHBuilder
 }
 ParallelSBVHBuilder::Task::SpatialSplit ParallelSBVHBuilder::Task::find_spatial_split() {
 	SpatialSplit ss{};
-	if (m_thread_count == 1) {
+	if (m_thread_count > 1) {
+		_find_spatial_split_parallel(&ss);
+	} else {
 		_find_spatial_split_dim<0>(&ss);
 		_find_spatial_split_dim<1>(&ss);
 		_find_spatial_split_dim<2>(&ss);
-	} else {
-		_find_spatial_split_parallel(&ss);
 	}
 	return ss;
 }
@@ -412,7 +424,7 @@ ParallelSBVHBuilder::Task::perform_spatial_split(const SpatialSplit &ss) {
 	std::vector<Reference> right_refs{m_references.begin() + right_begin, m_references.begin() + right_end};
 	left_refs.resize(left_end - left_begin);
 
-	auto [left_thread_count, right_thread_count] = get_thread_counts(left_refs.size(), right_refs.size());
+	auto [left_thread_count, right_thread_count] = get_child_thread_counts(left_refs.size(), right_refs.size());
 	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
 	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread_begin + left_thread_count,
 	             right_thread_count}};
@@ -677,7 +689,7 @@ ParallelSBVHBuilder::Task::perform_object_split(const ObjectSplit &os) {
 	std::vector<Reference> right_refs{m_references.begin() + right_begin, m_references.begin() + right_end};
 	left_refs.resize(left_end - left_begin);
 
-	auto [left_thread_count, right_thread_count] = get_thread_counts(left_refs.size(), right_refs.size());
+	auto [left_thread_count, right_thread_count] = get_child_thread_counts(left_refs.size(), right_refs.size());
 	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
 	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread_begin + left_thread_count,
 	             right_thread_count}};

@@ -123,13 +123,20 @@ private:
 		inline ObjectSplit find_object_split();
 		inline std::tuple<Task, Task> perform_object_split(const ObjectSplit &os);
 
-		inline std::tuple<uint32_t, uint32_t> get_thread_counts(uint32_t left_ref_count,
-		                                                        uint32_t right_ref_count) const;
+		inline std::tuple<uint32_t, uint32_t> get_child_thread_counts(uint32_t left_ref_count,
+		                                                              uint32_t right_ref_count) const;
 
 		inline void perform_leaf() { m_node->tri_idx = m_references.front().tri_idx; }
 
 		inline ThreadUnit &get_thread_unit(uint32_t idx = 0) const {
 			return m_p_builder->m_thread_group[m_thread_begin + idx - 1];
+		}
+
+		const moodycamel::ProducerToken &get_queue_producer_token() const {
+			return m_p_builder->m_producer_tokens[m_thread_begin];
+		}
+		moodycamel::ConsumerToken &get_queue_consumer_token() const {
+			return m_p_builder->m_consumer_tokens[m_thread_begin];
 		}
 
 	public:
@@ -152,8 +159,11 @@ private:
 		void LocalRun();
 	};
 
-	moodycamel::ConcurrentQueue<Task> m_task_queue;
+	// Task queue
 	std::atomic_uint32_t m_task_count{};
+	moodycamel::ConcurrentQueue<Task> m_task_queue;
+	std::vector<moodycamel::ConsumerToken> m_consumer_tokens;
+	std::vector<moodycamel::ProducerToken> m_producer_tokens;
 
 	Task get_root_task();
 	// void local_run_task(Task &&task);
