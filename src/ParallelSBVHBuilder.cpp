@@ -9,6 +9,8 @@
 void ParallelSBVHBuilder::Run() {
 	spdlog::info("Begin, threshold = {}", kLocalRunThreshold);
 	auto begin = std::chrono::steady_clock::now();
+	if (std::thread::hardware_concurrency() > 1)
+		m_thread_group = std::make_unique<ThreadUnit[]>(std::thread::hardware_concurrency() - 1);
 	get_root_task().BlockRun();
 	spdlog::info(
 	    "End {} ms",
@@ -27,7 +29,7 @@ ParallelSBVHBuilder::Task ParallelSBVHBuilder::get_root_task() {
 			references.push_back(ref);
 		}
 	}
-	return Task{this, &m_root, std::move(references), 0, std::thread::hardware_concurrency()};
+	return Task{this, &m_root, std::move(references), 0, 0, std::thread::hardware_concurrency()};
 }
 
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBuilder::Task::Run() {
@@ -95,9 +97,7 @@ void ParallelSBVHBuilder::Task::BlockRun() {
 	}
 }
 
-std::future<void> ParallelSBVHBuilder::Task::AsyncRun() {
-	return std::async(std::launch::async, &Task::BlockRun, this);
-}
+std::future<void> ParallelSBVHBuilder::Task::AsyncRun() { return get_thread_unit(0).Push(&Task::BlockRun, this); }
 
 void ParallelSBVHBuilder::Task::LocalRun() {
 	auto new_tasks = Run();
@@ -236,62 +236,60 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_spatial_split_dim(
 		left_aabb.Expand(spatial_bins[i].aabb);
 	}
 }
-inline std::array<std::array<ParallelSBVHBuilder::Task::SpatialBin, ParallelSBVHBuilder::kSpatialBinNum>, 3>
-ParallelSBVHBuilder::Task::_compute_spatial_bins_parallel(std::atomic_uint32_t *counter, const glm::vec3 &bin_bases,
-                                                          const glm::vec3 &bin_widths) {
-	std::array<std::array<ParallelSBVHBuilder::Task::SpatialBin, ParallelSBVHBuilder::kSpatialBinNum>, 3> ret{};
-
-	const glm::vec3 inv_bin_widths = 1.0f / bin_widths;
-	for (uint32_t cur = (*counter)++; cur < m_references.size(); cur = (*counter)++) {
-		const auto &ref = m_references[cur];
-		glm::u32vec3 bins =
-		    glm::clamp(glm::u32vec3((ref.aabb.min - bin_bases) * inv_bin_widths), 0u, kSpatialBinNum - 1);
-		glm::u32vec3 last_bins =
-		    glm::clamp(glm::u32vec3((ref.aabb.max - bin_bases) * inv_bin_widths), 0u, kSpatialBinNum - 1);
-
-		for (int dim = 0; dim < 3; ++dim) {
-			uint32_t bin = bins[dim], last_bin = last_bins[dim];
-			auto &spatial_bins = ret[dim];
-
-			++spatial_bins[bin].in;
-			Reference cur_ref = ref;
-			for (; bin < last_bin; ++bin) {
-				auto [left_ref, right_ref] =
-				    m_p_builder->split_reference(cur_ref, dim, float(bin + 1) * bin_widths[dim] + bin_bases[dim]);
-				spatial_bins[bin].aabb.Expand(left_ref.aabb);
-				cur_ref = right_ref;
-			}
-			spatial_bins[last_bin].aabb.Expand(cur_ref.aabb);
-			++spatial_bins[last_bin].out;
-		}
-	}
-
-	return ret;
-}
-void ParallelSBVHBuilder::Task::_merge_spatial_bins(std::array<std::array<SpatialBin, kSpatialBinNum>, 3> *p_l,
-                                                    std::array<std::array<SpatialBin, kSpatialBinNum>, 3> &&r) {
-	for (int dim = 0; dim < 3; ++dim) {
-		for (uint32_t x = 0; x < kSpatialBinNum; ++x) {
-			auto &cl = (*p_l)[dim][x];
-			const auto &cr = r[dim][x];
-			cl.aabb.Expand(cr.aabb);
-			cl.in += cr.in;
-			cl.out += cr.out;
-		}
-	}
-}
 void ParallelSBVHBuilder::Task::_find_spatial_split_parallel(ParallelSBVHBuilder::Task::SpatialSplit *p_ss) {
 	const glm::vec3 &bin_bases = m_node->aabb.min;
-	const glm::vec3 bin_widths = m_node->aabb.GetExtent() / (float)kObjectBinNum;
+	const glm::vec3 bin_widths = m_node->aabb.GetExtent() / (float)kObjectBinNum, inv_bin_widths = 1.0f / bin_widths;
 
 	std::atomic_uint32_t counter{0};
+
+	auto compute_spatial_bins_func = [this, &bin_bases, &bin_widths, &inv_bin_widths, &counter]() {
+		std::array<std::array<ParallelSBVHBuilder::Task::SpatialBin, ParallelSBVHBuilder::kSpatialBinNum>, 3> ret{};
+
+		for (uint32_t cur = counter++; cur < m_references.size(); cur = counter++) {
+			const auto &ref = m_references[cur];
+			glm::u32vec3 bins =
+			    glm::clamp(glm::u32vec3((ref.aabb.min - bin_bases) * inv_bin_widths), 0u, kSpatialBinNum - 1);
+			glm::u32vec3 last_bins =
+			    glm::clamp(glm::u32vec3((ref.aabb.max - bin_bases) * inv_bin_widths), 0u, kSpatialBinNum - 1);
+
+			for (int dim = 0; dim < 3; ++dim) {
+				uint32_t bin = bins[dim], last_bin = last_bins[dim];
+				auto &spatial_bins = ret[dim];
+
+				++spatial_bins[bin].in;
+				Reference cur_ref = ref;
+				for (; bin < last_bin; ++bin) {
+					auto [left_ref, right_ref] =
+					    m_p_builder->split_reference(cur_ref, dim, float(bin + 1) * bin_widths[dim] + bin_bases[dim]);
+					spatial_bins[bin].aabb.Expand(left_ref.aabb);
+					cur_ref = right_ref;
+				}
+				spatial_bins[last_bin].aabb.Expand(cur_ref.aabb);
+				++spatial_bins[last_bin].out;
+			}
+		}
+		return ret;
+	};
+
+	// Async compute bins
 	std::vector<std::future<std::array<std::array<SpatialBin, kSpatialBinNum>, 3>>> futures(m_thread_count - 1);
-	for (auto &f : futures)
-		f = std::async(std::launch::async, &Task::_compute_spatial_bins_parallel, this, &counter, bin_bases,
-		               bin_widths);
-	auto bins = _compute_spatial_bins_parallel(&counter, bin_bases, bin_widths);
-	for (auto &f : futures)
-		_merge_spatial_bins(&bins, f.get());
+	for (uint32_t i = 1; i < m_thread_count; ++i)
+		futures[i - 1] = get_thread_unit(i).Push(compute_spatial_bins_func);
+	auto bins = compute_spatial_bins_func();
+
+	// Merge Bins
+	for (auto &f : futures) {
+		auto r = f.get();
+		for (int dim = 0; dim < 3; ++dim) {
+			for (uint32_t x = 0; x < kSpatialBinNum; ++x) {
+				auto &cl = bins[dim][x];
+				const auto &cr = r[dim][x];
+				cl.aabb.Expand(cr.aabb);
+				cl.in += cr.in;
+				cl.out += cr.out;
+			}
+		}
+	}
 
 	thread_local AABB right_aabbs[kSpatialBinNum];
 	for (int dim = 0; dim < 3; ++dim) {
@@ -410,8 +408,9 @@ ParallelSBVHBuilder::Task::perform_spatial_split(const SpatialSplit &ss) {
 	left_refs.shrink_to_fit();
 
 	auto [left_thread_count, right_thread_count] = get_thread_counts(left_refs.size(), right_refs.size());
-	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, left_thread_count},
-	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, right_thread_count}};
+	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
+	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread_begin + left_thread_count,
+	             right_thread_count}};
 }
 
 /*
@@ -506,8 +505,8 @@ void ParallelSBVHBuilder::Task::_find_object_split_binned_parallel(ObjectSplit *
 	// Put references into bins according to centers
 	for (const auto &ref : m_references) {
 	    uint32_t bin =
-	        glm::clamp(uint32_t((ref.aabb.GetDimCenter<DIM>() - bound_base) * inv_bin_width), 0u, kObjectBinNum - 1);
-	    object_bins[bin].aabb.Expand(ref.aabb);
+	        glm::clamp(uint32_t((ref.aabb.GetDimCenter<DIM>() - bound_base) * inv_bin_width), 0u, kObjectBinNum -
+	1); object_bins[bin].aabb.Expand(ref.aabb);
 	    ++object_bins[bin].cnt;
 	}
 
@@ -615,6 +614,7 @@ ParallelSBVHBuilder::Task::perform_object_split(const ObjectSplit &os) {
 	left_refs.shrink_to_fit();
 
 	auto [left_thread_count, right_thread_count] = get_thread_counts(left_refs.size(), right_refs.size());
-	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, left_thread_count},
-	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, right_thread_count}};
+	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
+	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread_begin + left_thread_count,
+	             right_thread_count}};
 }
