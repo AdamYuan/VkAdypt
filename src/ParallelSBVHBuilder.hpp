@@ -46,21 +46,22 @@ private:
 	private:
 		std::optional<std::function<void()>> m_task;
 		std::condition_variable m_task_cv;
+		std::mutex m_task_mutex;
 		std::thread m_thread;
 		std::atomic_bool m_run;
+
 		inline void worker_func() {
-			std::mutex cv_mutex;
-			std::function<void()> task;
-			while (true) {
-				std::unique_lock<std::mutex> cv_lock{cv_mutex};
-				m_task_cv.wait(cv_lock,
-				               [this] { return m_task.has_value() || !m_run.load(std::memory_order_acquire); });
-				if (m_run.load(std::memory_order_acquire)) {
+			for (std::function<void()> task;;) {
+				{
+					std::unique_lock<std::mutex> lock{m_task_mutex};
+					m_task_cv.wait(lock,
+					               [this] { return m_task.has_value() || !m_run.load(std::memory_order_acquire); });
+					if (!m_run.load(std::memory_order_acquire) && !m_task.has_value())
+						return;
 					task = std::move(m_task.value());
 					m_task.reset();
-					task();
-				} else
-					return;
+				}
+				task();
 			}
 		}
 
@@ -71,13 +72,15 @@ private:
 			m_task_cv.notify_one();
 			m_thread.join();
 		}
-		template <class F, class... Args>
-		inline auto Push(F &&f, Args &&...args) -> std::future<std::result_of_t<F(Args...)>> {
-			using return_type = typename std::result_of<F(Args...)>::type;
-			auto task = std::make_shared<std::packaged_task<return_type()>>(
-			    std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-			std::future<return_type> res = task->get_future();
-			m_task = [task]() { (*task)(); };
+		template <class F, class... Args, typename R = std::result_of_t<F(Args...)>>
+		inline std::future<R> Push(F &&f, Args &&...args) {
+			auto task =
+			    std::make_shared<std::packaged_task<R()>>(std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+			std::future<R> res = task->get_future();
+			{
+				std::scoped_lock<std::mutex> lock{m_task_mutex};
+				m_task = [task]() { (*task)(); };
+			}
 			m_task_cv.notify_one();
 			return res;
 		}
