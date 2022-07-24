@@ -14,6 +14,7 @@
 class ParallelSBVHBuilder {
 private:
 	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
+	static constexpr uint32_t kParallelForBlockSize = 64;
 	static constexpr uint32_t kLocalRunThreshold = 512;
 	const Scene &m_scene;
 	const BVHConfig &m_config;
@@ -71,7 +72,7 @@ private:
 			m_thread.join();
 		}
 		template <class F, class... Args>
-		inline auto Push(F &&f, Args &&...args) -> std::future<typename std::result_of<F(Args...)>::type> {
+		inline auto Push(F &&f, Args &&...args) -> std::future<std::result_of_t<F(Args...)>> {
 			using return_type = typename std::result_of<F(Args...)>::type;
 			auto task = std::make_shared<std::packaged_task<return_type()>>(
 			    std::bind(std::forward<F>(f), std::forward<Args>(args)...));
