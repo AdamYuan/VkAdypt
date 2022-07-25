@@ -14,23 +14,26 @@ private:
 	WideBVH *m_p_wbvh;
 
 #pragma pack(push, 1)
-	struct NodeCost {
-		float m_sah;
+	struct NodeInfo {
 		enum Type { kInternal = 0, kLeaf, kDistribute };
 		uint8_t m_type : 2;
 		uint8_t m_distribute_0 : 3;
 		uint8_t m_distribute_1 : 3;
 	};
-	static_assert(sizeof(NodeCost) == 5);
+	static_assert(sizeof(NodeInfo) == 1);
 #pragma pack(pop)
 
-	struct NodeCostGroup {
-		NodeCost m_arr[7];
-		NodeCost &operator[](uint32_t i) { return m_arr[i - 1]; }
+	struct NodeInfoGroup {
+		std::array<NodeInfo, 7> arr;
+		NodeInfo &operator[](uint32_t i) { return arr[i - 1]; }
+	};
+	struct NodeSAHGroup {
+		std::array<float, 7> arr;
+		float &operator[](uint32_t i) { return arr[i - 1]; }
 	};
 
-	std::vector<NodeCostGroup> m_costs;
-	uint32_t calculate_cost(BVHIterator node);
+	std::vector<NodeInfoGroup> m_infos;
+	std::tuple<uint32_t, NodeSAHGroup> calculate_cost(BVHIterator node);
 	//{node_idx, i} are the two dimensions of dp array
 	// out_size describes the number of children
 	// out_idx  stores the children index

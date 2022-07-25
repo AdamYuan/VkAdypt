@@ -1,7 +1,7 @@
 namespace wide_bvh_detail {
 
 template <class BVHType> void WideBVHBuilder<BVHType>::Run() {
-	m_costs.resize(m_bin_bvh.GetNodeCount());
+	m_infos.resize(m_bin_bvh.GetNodeRange());
 	calculate_cost(m_bin_bvh.GetRoot());
 	spdlog::info("WideBVH cost analyzed");
 
@@ -10,8 +10,8 @@ template <class BVHType> void WideBVHBuilder<BVHType>::Run() {
 	create_nodes(m_bin_bvh.GetRoot(), 0);
 	spdlog::info("WideBVH built with {} nodes", m_p_wbvh->m_nodes.size());
 
-	m_costs.clear();
-	m_costs.shrink_to_fit();
+	m_infos.clear();
+	m_infos.shrink_to_fit();
 	m_p_wbvh->m_nodes.shrink_to_fit();
 }
 
@@ -22,22 +22,27 @@ WideBVHBuilder<BVHType>::WideBVHBuilder(WideBVH *p_wbvh, const BinaryBVHBase<BVH
 	m_p_wbvh->m_tri_indices.clear();
 }
 
-template <class BVHType> uint32_t WideBVHBuilder<BVHType>::calculate_cost(BVHIterator node) {
+template <class BVHType>
+std::tuple<uint32_t, typename WideBVHBuilder<BVHType>::NodeSAHGroup>
+WideBVHBuilder<BVHType>::calculate_cost(BVHIterator node) {
+	NodeSAHGroup sah;
+
 	float area = node.GetAABB().GetArea();
 	// is leaf, then initialize
 	auto node_idx = node.GetIndex();
 	if (node.IsLeaf()) {
-		for (uint32_t i = 1; i <= 7; ++i) {
-			m_costs[node_idx][i].m_sah = m_config.GetTriangleCost() * area;
-			m_costs[node_idx][i].m_type = NodeCost::kLeaf;
+		for (uint32_t i = 1; i < 8; ++i) {
+			sah[i] = m_config.GetTriangleCost() * area;
+			m_infos[node_idx][i].m_type = NodeInfo::kLeaf;
 		}
-		return 1;
+		return {1, std::move(sah)};
 	}
 
-	uint32_t tri_count = calculate_cost(node.GetLeft()) + calculate_cost(node.GetRight());
-	uint32_t lidx = node.GetLeft().GetIndex(), ridx = node.GetRight().GetIndex();
+	auto [left_tri_count, left_sah] = calculate_cost(node.GetLeft());
+	auto [right_tri_count, right_sah] = calculate_cost(node.GetRight());
+	uint32_t tri_count = left_tri_count + right_tri_count;
 
-	auto &dp = m_costs[node_idx];
+	auto &info = m_infos[node_idx];
 
 	{ // for i = 1
 		float c_leaf = tri_count <= 3 ? area * m_config.GetTriangleCost(tri_count) : FLT_MAX;
@@ -46,40 +51,42 @@ template <class BVHType> uint32_t WideBVHBuilder<BVHType>::calculate_cost(BVHIte
 		{ // calculate c_internal
 			float node_sah = area * m_config.GetNodeCost();
 			for (uint32_t k = 1; k < 8; ++k) {
-				float r = node_sah + m_costs[lidx][k].m_sah + m_costs[ridx][8 - k].m_sah;
+				float r = node_sah + left_sah[k] + right_sah[8 - k];
 				if (r < c_internal) {
 					c_internal = r;
-					dp[1].m_distribute_0 = k;
-					dp[1].m_distribute_1 = 8 - k;
+					info[1].m_distribute_0 = k;
+					info[1].m_distribute_1 = 8 - k;
 				}
 			}
 		}
 		if (c_leaf < c_internal) {
-			dp[1].m_sah = c_leaf;
-			dp[1].m_type = NodeCost::kLeaf;
+			sah[1] = c_leaf;
+			info[1].m_type = NodeInfo::kLeaf;
 		} else {
-			dp[1].m_sah = c_internal;
-			dp[1].m_type = NodeCost::kInternal;
+			sah[1] = c_internal;
+			info[1].m_type = NodeInfo::kInternal;
 		}
 	}
 
-	for (uint32_t i = 2; i <= 7; ++i) {
+	for (uint32_t i = 2; i < 8; ++i) {
 		float c_distribute = FLT_MAX;
 		for (uint32_t k = 1; k < i; ++k) {
-			float r = m_costs[lidx][k].m_sah + m_costs[ridx][i - k].m_sah;
+			float r = left_sah[k] + right_sah[i - k];
 			if (r < c_distribute) {
 				c_distribute = r;
-				dp[i].m_distribute_0 = k;
-				dp[i].m_distribute_1 = i - k;
+				info[i].m_distribute_0 = k;
+				info[i].m_distribute_1 = i - k;
 			}
 		}
-		if (c_distribute < dp[i - 1].m_sah) {
-			dp[i].m_sah = c_distribute;
-			dp[i].m_type = NodeCost::kDistribute;
-		} else
-			dp[i] = dp[i - 1];
+		if (c_distribute < sah[i - 1]) {
+			sah[i] = c_distribute;
+			info[i].m_type = NodeInfo::kDistribute;
+		} else {
+			sah[i] = sah[i - 1];
+			info[i] = info[i - 1];
+		}
 	}
-	return tri_count;
+	return {tri_count, std::move(sah)};
 }
 
 template <class BVHType>
@@ -87,10 +94,10 @@ void WideBVHBuilder<BVHType>::fetch_children(BVHIterator node, uint32_t i, uint3
                                              BVHIterator out_nodes[8]) {
 	auto node_idx = node.GetIndex();
 	const BVHIterator ch[2] = {node.GetLeft(), node.GetRight()};
-	uint8_t cdis[2] = {m_costs[node_idx][i].m_distribute_0, m_costs[node_idx][i].m_distribute_1};
+	uint8_t cdis[2] = {m_infos[node_idx][i].m_distribute_0, m_infos[node_idx][i].m_distribute_1};
 	for (uint32_t c = 0; c < 2; ++c) {
-		const auto &info = m_costs[ch[c].GetIndex()][cdis[c]];
-		if (info.m_type == NodeCost::kDistribute)
+		const auto &info = m_infos[ch[c].GetIndex()][cdis[c]];
+		if (info.m_type == NodeInfo::kDistribute)
 			fetch_children(ch[c], cdis[c], out_cnt, out_nodes);
 		else
 			out_nodes[(*out_cnt)++] = ch[c];
@@ -223,13 +230,13 @@ template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(BVHIterator 
 			CUR.m_qhiy[i] = (uint8_t)qhigh.y;
 			CUR.m_qhiz[i] = (uint8_t)qhigh.z;
 
-			if (m_costs[cur.GetIndex()][1].m_type == NodeCost::kLeaf) {
+			if (m_infos[cur.GetIndex()][1].m_type == NodeInfo::kLeaf) {
 				uint32_t tidx = m_p_wbvh->m_tri_indices.size() - CUR.m_tri_idx_base;
 				uint32_t tri_cnt = fetch_leaves(cur);
 				// bbbindex
 				constexpr uint32_t kLeafMetaMap[4] = {0u, 0b00100000u, 0b01100000u, 0b11100000u};
 				CUR.m_meta[i] = kLeafMetaMap[tri_cnt] | tidx;
-			} else if (m_costs[cur.GetIndex()][1].m_type == NodeCost::kInternal) {
+			} else if (m_infos[cur.GetIndex()][1].m_type == NodeInfo::kInternal) {
 				uint32_t widx = m_p_wbvh->m_nodes.size() - CUR.m_child_idx_base;
 				m_p_wbvh->m_nodes.emplace_back();
 				// 001index
@@ -242,7 +249,7 @@ template <class BVHType> void WideBVHBuilder<BVHType>::create_nodes(BVHIterator 
 	}
 
 	for (uint32_t i = 0; i < ch_cnt; ++i)
-		if (m_costs[ch_arr[i].GetIndex()][1].m_type == NodeCost::kInternal)
+		if (m_infos[ch_arr[i].GetIndex()][1].m_type == NodeInfo::kInternal)
 			create_nodes(ch_arr[i], CUR.m_child_idx_base + (CUR.m_meta[ch_slot_arr[i]] & 0x1fu) - 24u);
 #undef CUR
 }
