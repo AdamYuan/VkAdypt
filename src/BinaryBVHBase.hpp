@@ -21,6 +21,8 @@ public:
 	public:
 		inline Iterator() = default;
 		inline explicit Iterator(const BVHType *p_bvh) : m_p_bvh{p_bvh}, m_iterator{p_bvh->get_root()} {}
+		inline bool operator==(const Iterator &r) const { return m_p_bvh == r.m_p_bvh && m_iterator == r.m_iterator; }
+		inline bool operator!=(const Iterator &r) const { return m_p_bvh != r.m_p_bvh || m_iterator != r.m_iterator; }
 		inline Iterator(const BVHType *p_bvh, const typename BVHType::Iterator &iterator)
 		    : m_p_bvh{p_bvh}, m_iterator{iterator} {}
 		inline uint32_t GetIndex() const { return m_p_bvh->get_index(m_iterator); }

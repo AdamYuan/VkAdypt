@@ -86,6 +86,9 @@ WideBVHBuilder<BVHType>::calculate_cost(BVHIterator node) {
 			info[i] = info[i - 1];
 		}
 	}
+	if (node == m_bin_bvh.GetRoot()) {
+		spdlog::info("SAH: {}", sah[1]);
+	}
 	return {tri_count, std::move(sah)};
 }
 

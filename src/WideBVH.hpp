@@ -29,8 +29,6 @@ private:
 	BVHConfig m_config;
 	std::shared_ptr<Scene> m_scene_ptr;
 
-	// for saving file
-	static constexpr const char *kVersionStr = "CWBVH_1.0";
 	std::vector<Node> m_nodes;
 	std::vector<uint32_t> m_tri_indices;
 

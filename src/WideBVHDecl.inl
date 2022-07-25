@@ -13,7 +13,6 @@ private:
 	const BVHConfig &m_config;
 	WideBVH *m_p_wbvh;
 
-#pragma pack(push, 1)
 	struct NodeInfo {
 		enum Type { kInternal = 0, kLeaf, kDistribute };
 		uint8_t m_type : 2;
@@ -21,18 +20,19 @@ private:
 		uint8_t m_distribute_1 : 3;
 	};
 	static_assert(sizeof(NodeInfo) == 1);
-#pragma pack(pop)
-
 	struct NodeInfoGroup {
 		std::array<NodeInfo, 7> arr;
 		NodeInfo &operator[](uint32_t i) { return arr[i - 1]; }
 	};
+	static_assert(sizeof(NodeInfoGroup) == 7);
+
 	struct NodeSAHGroup {
 		std::array<float, 7> arr;
 		float &operator[](uint32_t i) { return arr[i - 1]; }
 	};
 
 	std::vector<NodeInfoGroup> m_infos;
+	// return triangle count and distribution SAHs
 	std::tuple<uint32_t, NodeSAHGroup> calculate_cost(BVHIterator node);
 	//{node_idx, i} are the two dimensions of dp array
 	// out_size describes the number of children

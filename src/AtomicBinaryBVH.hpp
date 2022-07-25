@@ -20,7 +20,6 @@ public:
 
 private:
 	AtomicAllocator<Node> m_node_pool;
-
 	uint32_t m_leaf_cnt{};
 
 public:
