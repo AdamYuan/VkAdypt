@@ -8,13 +8,13 @@
 #include <atomic>
 #include <cinttypes>
 
-template <class T, uint32_t ChunkSize> class AtomicAllocator {
+template <class T> class AtomicAllocator {
 private:
 	struct Node {
-		Node *next{};
-		T chunk[ChunkSize]{};
+		T chunk[1u << 16u];
 	};
-	std::atomic<Node *> m_list{};
+	std::atomic_uint16_t m_head{0};
+	Node *m_chunks[1u << 16u];
 
 public:
 	inline AtomicAllocator(const AtomicAllocator &r) = delete;
@@ -24,27 +24,24 @@ public:
 
 	inline AtomicAllocator() = default;
 	inline ~AtomicAllocator() {
-		Node *cur = m_list.load(std::memory_order_acquire);
-		while (cur) {
-			Node *next = cur->next;
-			delete cur;
-			cur = next;
-		}
+		uint32_t head = m_head.load();
+		for (uint32_t i = 0; i < head; ++i)
+			delete m_chunks[i];
 	}
-	inline T *AllocChunk() {
-		auto node = new Node{};
-		node->next = m_list.load(std::memory_order_relaxed);
-		while (!m_list.compare_exchange_weak(node->next, node, std::memory_order_release, std::memory_order_relaxed))
-			;
-		return node->chunk;
+	inline uint32_t AllocChunk() {
+		uint32_t id = m_head++;
+		m_chunks[id] = new Node{};
+		return id << 16u;
 	}
+	inline uint32_t GetRange() const { return m_head.load() << 16u; }
+	T &operator[](uint32_t id) { return m_chunks[id >> 16u]->chunk[id & 0xffffu]; }
+	const T &operator[](uint32_t id) const { return m_chunks[id >> 16u]->chunk[id & 0xffffu]; }
 };
 
-template <class T, uint32_t ChunkSize> class LocalAllocator {
+template <class T> class LocalAllocator {
 private:
-	AtomicAllocator<T, ChunkSize> &m_allocator_ref;
-	T *m_p_chunk;
-	uint32_t m_counter{};
+	AtomicAllocator<T> &m_allocator_ref;
+	uint32_t m_chunk, m_counter{};
 
 public:
 	inline LocalAllocator(const LocalAllocator &r) = delete;
@@ -52,14 +49,14 @@ public:
 	inline LocalAllocator(LocalAllocator &&r) noexcept = default;
 	inline LocalAllocator &operator=(LocalAllocator &&r) noexcept = default;
 
-	inline explicit LocalAllocator(AtomicAllocator<T, ChunkSize> &allocator)
-	    : m_allocator_ref{allocator}, m_p_chunk{allocator.AllocChunk()} {}
-	inline T *Alloc() {
-		if (m_counter < ChunkSize)
-			return m_p_chunk + (m_counter++);
+	inline explicit LocalAllocator(AtomicAllocator<T> &allocator)
+	    : m_allocator_ref{allocator}, m_chunk{allocator.AllocChunk()} {}
+	inline uint32_t Alloc() {
+		if (m_counter <= 0xffffu)
+			return m_chunk | (m_counter++);
 		else {
 			m_counter = 1;
-			return (m_p_chunk = m_allocator_ref.AllocChunk());
+			return (m_chunk = m_allocator_ref.AllocChunk());
 		}
 	}
 };

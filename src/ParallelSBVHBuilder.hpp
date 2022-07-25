@@ -19,7 +19,6 @@ public:
 private:
 	const uint32_t kThreadCount;
 	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
-	static constexpr uint32_t kReferenceAllocatorChunk = 256;
 	static constexpr uint32_t kParallelForBlockSize = 64;
 	static constexpr uint32_t kLocalRunThreshold = 512;
 
@@ -28,27 +27,20 @@ private:
 	const BVHConfig &m_config;
 	float m_min_overlap_area;
 
-	std::vector<LocalAllocator<AtomicBinaryBVH::Node, AtomicBinaryBVH::kAtomicAllocatorChunk>> m_thread_node_allocators;
+	AtomicAllocator<AtomicBinaryBVH::Node> &m_node_pool;
+	std::vector<LocalAllocator<AtomicBinaryBVH::Node>> m_thread_node_allocators;
 
-	std::atomic_uint32_t m_node_count{1}, m_leaf_count{0};
-	inline AtomicBinaryBVH::Node *
-	new_node(LocalAllocator<AtomicBinaryBVH::Node, AtomicBinaryBVH::kAtomicAllocatorChunk> *p_allocator) {
-		auto ret = p_allocator->Alloc();
-		ret->node_idx = m_node_count++;
-		return ret;
-	}
+	std::atomic_uint32_t m_leaf_count{0};
 
 	struct Reference {
 		AABB aabb;
 		uint32_t tri_idx{};
 	};
-	AtomicAllocator<Reference, kReferenceAllocatorChunk> m_reference_pool;
-	std::vector<LocalAllocator<Reference, kReferenceAllocatorChunk>> m_thread_reference_allocators;
+	AtomicAllocator<Reference> m_reference_pool;
+	std::vector<LocalAllocator<Reference>> m_thread_reference_allocators;
 
-	template <uint32_t DIM> inline static bool reference_cmp(const Reference &l, const Reference &r);
-	template <uint32_t DIM> inline static bool reference_ptr_cmp(const Reference *l, const Reference *r);
-	template <uint32_t DIM, typename Iter> inline static void sort_references(Iter first_ref, Iter last_ref);
-	template <typename Iter> inline static void sort_references(Iter first_ref, Iter last_ref, uint32_t dim);
+	template <uint32_t DIM, typename Iter> inline void sort_references(Iter first_ref, Iter last_ref);
+	template <typename Iter> inline void sort_references(Iter first_ref, Iter last_ref, uint32_t dim);
 	inline std::tuple<Reference, Reference> split_reference(const Reference &ref, uint32_t dim, float pos) const;
 
 	// A simple thread pool with 1 thread and 1 task
@@ -100,8 +92,8 @@ private:
 	class Task {
 	private:
 		ParallelSBVHBuilder *m_p_builder{};
-		AtomicBinaryBVH::Node *m_node{};
-		std::vector<Reference *> m_references;
+		uint32_t m_node_idx{};
+		std::vector<uint32_t> m_references;
 		uint32_t m_depth{}, m_thread{}, m_thread_count{};
 
 		struct ObjectSplit {
@@ -136,13 +128,23 @@ private:
 		inline std::tuple<uint32_t, uint32_t> get_child_thread_counts(uint32_t left_ref_count,
 		                                                              uint32_t right_ref_count) const;
 
+		inline AtomicBinaryBVH::Node &access_node(uint32_t node_idx) const {
+			return m_p_builder->m_node_pool[node_idx];
+		}
+		inline Reference &access_reference(uint32_t ref_idx) const { return m_p_builder->m_reference_pool[ref_idx]; }
+
 		inline void make_leaf() {
-			m_node->tri_idx = m_references.front()->tri_idx;
+			auto &node = access_node(m_node_idx);
+			node.tri_idx = access_reference(m_references.front()).tri_idx;
 			++m_p_builder->m_leaf_count;
 		}
 
 		inline ThreadUnit &get_thread_unit(uint32_t idx = 0) const {
 			return m_p_builder->m_thread_group[m_thread + idx - 1];
+		}
+		inline void assign_to_thread(uint32_t thread) {
+			m_thread = thread;
+			m_thread_count = 0;
 		}
 
 		inline const moodycamel::ProducerToken &get_queue_producer_token() const {
@@ -151,20 +153,14 @@ private:
 		inline moodycamel::ConsumerToken &get_queue_consumer_token() const {
 			return m_p_builder->m_consumer_tokens[m_thread];
 		}
-		inline AtomicBinaryBVH::Node *new_node() const {
-			return m_p_builder->new_node(&m_p_builder->m_thread_node_allocators[m_thread]);
-		}
-		inline Reference *new_reference() const { return m_p_builder->m_thread_reference_allocators[m_thread].Alloc(); }
-		inline void assign_to_thread(uint32_t thread) {
-			m_thread = thread;
-			m_thread_count = 0;
-		}
+		inline uint32_t new_node() const { return m_p_builder->m_thread_node_allocators[m_thread].Alloc(); }
+		inline uint32_t new_reference() const { return m_p_builder->m_thread_reference_allocators[m_thread].Alloc(); }
 
 	public:
 		inline Task() = default;
-		inline Task(ParallelSBVHBuilder *p_builder, AtomicBinaryBVH::Node *node, std::vector<Reference *> &&references,
+		inline Task(ParallelSBVHBuilder *p_builder, uint32_t node_idx, std::vector<uint32_t> &&references,
 		            uint32_t depth, uint32_t thread_begin, uint32_t thread_count)
-		    : m_p_builder{p_builder}, m_node{node}, m_references{std::move(references)}, m_depth{depth},
+		    : m_p_builder{p_builder}, m_node_idx{node_idx}, m_references{std::move(references)}, m_depth{depth},
 		      m_thread(thread_begin), m_thread_count{thread_count} {}
 		Task(const Task &r) = delete;
 		Task &operator=(const Task &r) = delete;
@@ -173,7 +169,7 @@ private:
 		Task &operator=(Task &&r) = default;
 
 		inline static bool PairEmpty(const std::tuple<Task, Task> &p) { return std::get<0>(p).Empty(); }
-		inline bool Empty() const { return !m_node; }
+		inline bool Empty() const { return !m_node_idx; }
 		std::tuple<Task, Task> Run();
 		void BlockRun();
 		std::future<void> AsyncRun();
@@ -191,7 +187,7 @@ private:
 public:
 	explicit ParallelSBVHBuilder(AtomicBinaryBVH *p_bvh)
 	    : kThreadCount(std::max(1u, std::thread::hardware_concurrency())), m_bvh{*p_bvh},
-	      m_scene(*p_bvh->GetScenePtr()),
+	      m_node_pool{p_bvh->m_node_pool}, m_scene(*p_bvh->GetScenePtr()),
 	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetArea() * 1e-5f} {}
 	void Run();
 };

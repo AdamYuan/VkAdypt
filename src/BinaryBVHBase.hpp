@@ -50,7 +50,7 @@ public:
 	inline Iterator GetRoot() const { return Iterator{(BVHType *)this}; }
 
 	uint32_t GetLeafCount() const { return ((BVHType *)this)->get_leaf_count(); }
-	uint32_t GetNodeCount() const { return ((BVHType *)this)->get_node_count(); }
+	uint32_t GetNodeRange() const { return ((BVHType *)this)->get_node_range(); }
 };
 
 #endif

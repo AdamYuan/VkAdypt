@@ -8,31 +8,33 @@ class AtomicBinaryBVH : public BinaryBVHBase<AtomicBinaryBVH> {
 public:
 	struct Node {
 		AABB aabb;
-		Node *left{}, *right{};
-		uint32_t tri_idx{}, node_idx{};
+		uint32_t left{};
+		union {
+			uint32_t right{};
+			uint32_t tri_idx;
+		};
 	};
-	using Iterator = const Node *;
+	static_assert(sizeof(Node) == 32);
+
+	using Iterator = uint32_t;
 
 private:
-	static constexpr uint32_t kAtomicAllocatorChunk = 256;
+	AtomicAllocator<Node> m_node_pool;
 
-	Node m_root{};
-	AtomicAllocator<Node, kAtomicAllocatorChunk> m_node_pool;
-
-	uint32_t m_node_cnt{}, m_leaf_cnt{};
+	uint32_t m_leaf_cnt{};
 
 public:
 	inline bool empty() const { return m_leaf_cnt == 0; }
-	static inline bool is_leaf(const Node *node) { return node->left == nullptr; }
-	static inline uint32_t get_index(const Node *node) { return node->node_idx; }
-	static inline const Node *get_left(const Node *node) { return node->left; }
-	static inline const Node *get_right(const Node *node) { return node->right; }
-	static inline uint32_t get_triangle_idx(const Node *node) { return node->tri_idx; }
-	static inline const AABB &get_aabb(const Node *node) { return node->aabb; }
+	inline bool is_leaf(uint32_t x) const { return m_node_pool[x].left == 0; }
+	inline uint32_t get_index(uint32_t x) const { return x; }
+	inline uint32_t get_left(uint32_t x) const { return m_node_pool[x].left; }
+	inline uint32_t get_right(uint32_t x) const { return m_node_pool[x].right; }
+	inline uint32_t get_triangle_idx(uint32_t x) const { return m_node_pool[x].tri_idx; }
+	inline const AABB &get_aabb(uint32_t x) const { return m_node_pool[x].aabb; }
 
-	inline const Node *get_root() const { return &m_root; }
+	inline uint32_t get_root() const { return 0; }
 
-	inline uint32_t get_node_count() const { return m_node_cnt; }
+	inline uint32_t get_node_range() const { return m_node_pool.GetRange(); }
 	inline uint32_t get_leaf_count() const { return m_leaf_cnt; }
 
 public:

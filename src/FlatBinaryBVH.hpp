@@ -37,7 +37,7 @@ public:
 	inline uint32_t get_root() const { return 0; }
 	inline bool empty() const { return m_nodes.empty(); }
 
-	inline uint32_t get_node_count() const { return m_nodes.size(); }
+	inline uint32_t get_node_range() const { return m_nodes.size(); }
 	inline uint32_t get_leaf_count() const { return m_leaf_cnt; }
 
 	friend class SBVHBuilder;
