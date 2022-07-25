@@ -15,8 +15,8 @@ private:
 public:
 	class Iterator {
 	private:
-		typename BVHType::Iterator m_iterator;
 		const BVHType *m_p_bvh{nullptr};
+		typename BVHType::Iterator m_iterator;
 
 	public:
 		inline Iterator() = default;
