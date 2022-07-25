@@ -11,9 +11,11 @@ void ParallelSBVHBuilder::Run() {
 		m_thread_group = std::make_unique<ThreadUnit[]>(kThreadCount - 1);
 	m_consumer_tokens.reserve(kThreadCount);
 	m_producer_tokens.reserve(kThreadCount);
+	m_thread_node_allocators.reserve(kThreadCount);
 	for (uint32_t i = 0; i < kThreadCount; ++i) {
 		m_consumer_tokens.emplace_back(m_task_queue);
 		m_producer_tokens.emplace_back(m_task_queue);
+		m_thread_node_allocators.emplace_back(m_node_pool);
 	}
 
 	spdlog::info("Begin, threshold = {}", kLocalRunThreshold);
@@ -91,6 +93,8 @@ void ParallelSBVHBuilder::Task::BlockRun() {
 		Task task;
 		while (m_p_builder->m_task_count.load()) {
 			if (m_p_builder->m_task_queue.try_dequeue(get_queue_consumer_token(), task)) {
+				task.assign_to_thread(m_thread);
+
 				if (task.m_references.size() <= kLocalRunThreshold) {
 					task.LocalRun();
 					--m_p_builder->m_task_count;
@@ -177,9 +181,6 @@ uint32_t ParallelSBVHBuilder::fetch_result(ParallelSBVHBuilder::Node *cur, std::
 		fetch_result(cur->right, p_nodes, p_leaf_count);
 		cur_bin_node.left_idx = fetch_result(cur->left, p_nodes, p_leaf_count);
 	}
-	// Delete node
-	if (cur != &m_root)
-		delete cur;
 	return cur_bin_idx;
 }
 
@@ -188,7 +189,7 @@ void ParallelSBVHBuilder::FetchResult(std::vector<BinaryBVH::Node> *p_nodes, uin
 	p_nodes->reserve(m_node_count.load());
 	*p_leaf_count = 0;
 	fetch_result(&m_root, p_nodes, p_leaf_count);
-	spdlog::info("Leaf count: {}", *p_leaf_count);
+	spdlog::info("Node count: {}, Leaf count: {}", m_node_count.load(), *p_leaf_count);
 }
 
 std::tuple<uint32_t, uint32_t> ParallelSBVHBuilder::Task::get_child_thread_counts(uint32_t left_ref_count,
@@ -350,9 +351,9 @@ ParallelSBVHBuilder::Task::SpatialSplit ParallelSBVHBuilder::Task::find_spatial_
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
 ParallelSBVHBuilder::Task::perform_spatial_split(const SpatialSplit &ss) {
 	if (!m_node->left)
-		m_node->left = m_p_builder->new_node();
+		m_node->left = new_node();
 	if (!m_node->right)
-		m_node->right = m_p_builder->new_node();
+		m_node->right = new_node();
 
 	auto &left = m_node->left, &right = m_node->right;
 	left->aabb = right->aabb = AABB();
@@ -426,9 +427,9 @@ ParallelSBVHBuilder::Task::perform_spatial_split(const SpatialSplit &ss) {
 	left_refs.resize(left_end - left_begin);
 
 	auto [left_thread_count, right_thread_count] = get_child_thread_counts(left_refs.size(), right_refs.size());
-	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
-	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread_begin + left_thread_count,
-	             right_thread_count}};
+	return {
+	    Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread, left_thread_count},
+	    Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread + left_thread_count, right_thread_count}};
 }
 
 /*
@@ -635,9 +636,9 @@ ParallelSBVHBuilder::Task::ObjectSplit ParallelSBVHBuilder::Task::find_object_sp
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
 ParallelSBVHBuilder::Task::perform_object_split(const ObjectSplit &os) {
 	if (!m_node->left)
-		m_node->left = m_p_builder->new_node();
+		m_node->left = new_node();
 	if (!m_node->right)
-		m_node->right = m_p_builder->new_node();
+		m_node->right = new_node();
 
 	auto &left = m_node->left, &right = m_node->right;
 	left->aabb = right->aabb = AABB();
@@ -691,7 +692,7 @@ ParallelSBVHBuilder::Task::perform_object_split(const ObjectSplit &os) {
 	left_refs.resize(left_end - left_begin);
 
 	auto [left_thread_count, right_thread_count] = get_child_thread_counts(left_refs.size(), right_refs.size());
-	return {Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread_begin, left_thread_count},
-	        Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread_begin + left_thread_count,
-	             right_thread_count}};
+	return {
+	    Task{m_p_builder, left, std::move(left_refs), m_depth + 1, m_thread, left_thread_count},
+	    Task{m_p_builder, right, std::move(right_refs), m_depth + 1, m_thread + left_thread_count, right_thread_count}};
 }

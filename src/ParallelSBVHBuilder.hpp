@@ -1,6 +1,7 @@
 #ifndef ADYPT_PARALLELSBVHBUILDER_HPP
 #define ADYPT_PARALLELSBVHBUILDER_HPP
 
+#include "AtomicAllocator.hpp"
 #include "BinaryBVH.hpp"
 #include <atomic>
 #include <cfloat>
@@ -17,6 +18,8 @@ private:
 	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
 	static constexpr uint32_t kParallelForBlockSize = 64;
 	static constexpr uint32_t kLocalRunThreshold = 512;
+	static constexpr uint32_t kAtomicAllocatorChunk = 256;
+
 	const Scene &m_scene;
 	const BVHConfig &m_config;
 	float m_min_overlap_area;
@@ -24,12 +27,17 @@ private:
 	struct Node {
 		AABB aabb;
 		Node *left{}, *right{};
-		uint32_t tri_idx{};
+		uint32_t tri_idx{}, node_idx{};
 	} m_root{};
+	AtomicAllocator<Node, kAtomicAllocatorChunk> m_node_pool;
+
+	std::vector<LocalAllocator<Node, kAtomicAllocatorChunk>> m_thread_node_allocators;
+
 	std::atomic_uint32_t m_node_count{1};
-	inline Node *new_node() {
-		++m_node_count;
-		return new Node{};
+	inline Node *new_node(LocalAllocator<Node, kAtomicAllocatorChunk> *p_allocator) {
+		auto ret = p_allocator->Alloc();
+		ret->node_idx = m_node_count++;
+		return ret;
 	}
 
 	struct Reference {
@@ -93,7 +101,7 @@ private:
 		ParallelSBVHBuilder *m_p_builder{};
 		Node *m_node{};
 		std::vector<Reference> m_references;
-		uint32_t m_depth{}, m_thread_begin{}, m_thread_count{};
+		uint32_t m_depth{}, m_thread{}, m_thread_count{};
 
 		struct ObjectSplit {
 			AABB left_aabb, right_aabb;
@@ -130,14 +138,21 @@ private:
 		inline void perform_leaf() { m_node->tri_idx = m_references.front().tri_idx; }
 
 		inline ThreadUnit &get_thread_unit(uint32_t idx = 0) const {
-			return m_p_builder->m_thread_group[m_thread_begin + idx - 1];
+			return m_p_builder->m_thread_group[m_thread + idx - 1];
 		}
 
-		const moodycamel::ProducerToken &get_queue_producer_token() const {
-			return m_p_builder->m_producer_tokens[m_thread_begin];
+		inline const moodycamel::ProducerToken &get_queue_producer_token() const {
+			return m_p_builder->m_producer_tokens[m_thread];
 		}
-		moodycamel::ConsumerToken &get_queue_consumer_token() const {
-			return m_p_builder->m_consumer_tokens[m_thread_begin];
+		inline moodycamel::ConsumerToken &get_queue_consumer_token() const {
+			return m_p_builder->m_consumer_tokens[m_thread];
+		}
+		inline Node *new_node() const {
+			return m_p_builder->new_node(&m_p_builder->m_thread_node_allocators[m_thread]);
+		}
+		inline void assign_to_thread(uint32_t thread) {
+			m_thread = thread;
+			m_thread_count = 0;
 		}
 
 	public:
@@ -145,7 +160,7 @@ private:
 		inline Task(ParallelSBVHBuilder *p_builder, Node *node, std::vector<Reference> &&references, uint32_t depth,
 		            uint32_t thread_begin, uint32_t thread_count)
 		    : m_p_builder{p_builder}, m_node{node}, m_references{std::move(references)}, m_depth{depth},
-		      m_thread_begin(thread_begin), m_thread_count{thread_count} {}
+		      m_thread(thread_begin), m_thread_count{thread_count} {}
 		Task(const Task &r) = delete;
 		Task &operator=(const Task &r) = delete;
 
