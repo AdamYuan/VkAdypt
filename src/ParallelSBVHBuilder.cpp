@@ -1,9 +1,8 @@
 #include "ParallelSBVHBuilder.hpp"
 
 #include <pdqsort.h>
-#define PARALLEL_SORTER pdqsort_branchless
-#include "ParallelSort.hpp"
 #include <queue>
+#include <random>
 #include <spdlog/spdlog.h>
 
 void ParallelSBVHBuilder::Run() {
@@ -15,19 +14,22 @@ void ParallelSBVHBuilder::Run() {
 	for (uint32_t i = 0; i < kThreadCount; ++i) {
 		m_consumer_tokens.emplace_back(m_task_queue);
 		m_producer_tokens.emplace_back(m_task_queue);
-		m_thread_node_allocators.emplace_back(m_node_pool);
+		m_thread_node_allocators.emplace_back(m_bvh.m_node_pool);
 	}
 
 	spdlog::info("Begin, threshold = {}", kLocalRunThreshold);
 	auto begin = std::chrono::steady_clock::now();
-	get_root_task().BlockRun();
+	make_root_task().BlockRun();
 	spdlog::info(
 	    "End {} ms",
 	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count());
+
+	m_bvh.m_node_cnt = m_node_count;
+	m_bvh.m_leaf_cnt = m_leaf_count;
 }
 
-ParallelSBVHBuilder::Task ParallelSBVHBuilder::get_root_task() {
-	m_root.aabb = m_scene.GetAABB();
+ParallelSBVHBuilder::Task ParallelSBVHBuilder::make_root_task() {
+	m_bvh.m_root.aabb = m_scene.GetAABB();
 	std::vector<Reference> references;
 	{
 		references.reserve(m_scene.GetTriangles().size());
@@ -38,7 +40,7 @@ ParallelSBVHBuilder::Task ParallelSBVHBuilder::get_root_task() {
 			references.push_back(ref);
 		}
 	}
-	return Task{this, &m_root, std::move(references), 0, 0, kThreadCount};
+	return Task{this, &m_bvh.m_root, std::move(references), 0, 0, kThreadCount};
 }
 
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBuilder::Task::Run() {
@@ -165,31 +167,6 @@ ParallelSBVHBuilder::split_reference(const ParallelSBVHBuilder::Reference &ref, 
 	right.aabb.IntersectAABB(ref.aabb);
 
 	return {left, right};
-}
-
-uint32_t ParallelSBVHBuilder::fetch_result(ParallelSBVHBuilder::Node *cur, std::vector<BinaryBVH::Node> *p_nodes,
-                                           uint32_t *p_leaf_count) {
-	uint32_t cur_bin_idx = p_nodes->size();
-	p_nodes->emplace_back();
-	auto &cur_bin_node = p_nodes->back();
-	cur_bin_node.aabb = cur->aabb;
-	if (!cur->left || !cur->right) { // Leaf
-		cur_bin_node.left_idx = UINT32_MAX;
-		cur_bin_node.tri_idx = cur->tri_idx;
-		++(*p_leaf_count);
-	} else {
-		fetch_result(cur->right, p_nodes, p_leaf_count);
-		cur_bin_node.left_idx = fetch_result(cur->left, p_nodes, p_leaf_count);
-	}
-	return cur_bin_idx;
-}
-
-void ParallelSBVHBuilder::FetchResult(std::vector<BinaryBVH::Node> *p_nodes, uint32_t *p_leaf_count) {
-	p_nodes->clear();
-	p_nodes->reserve(m_node_count.load());
-	*p_leaf_count = 0;
-	fetch_result(&m_root, p_nodes, p_leaf_count);
-	spdlog::info("Node count: {}, Leaf count: {}", m_node_count.load(), *p_leaf_count);
 }
 
 std::tuple<uint32_t, uint32_t> ParallelSBVHBuilder::Task::get_child_thread_counts(uint32_t left_ref_count,

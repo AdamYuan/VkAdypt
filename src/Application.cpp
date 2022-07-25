@@ -262,9 +262,8 @@ Application::~Application() {
 void Application::Load(const char *filename) {
 	BVHConfig bvh_config = {};
 	std::shared_ptr<Scene> scene = Scene::CreateFromFile(filename);
-	std::shared_ptr<BinaryBVH> sbvh = BinaryBVH::Build<ParallelSBVHBuilder>(bvh_config, scene);
-	std::shared_ptr<WideBVH> widebvh = WideBVH::Build(sbvh);
-	widebvh->SaveToFile("a.bvh");
+	auto binary_bvh = AtomicBinaryBVH::Build<ParallelSBVHBuilder>(bvh_config, scene);
+	std::shared_ptr<WideBVH> widebvh = WideBVH::Build(binary_bvh);
 	m_accelerated_scene = AcceleratedScene::Create(m_loader_queue, widebvh);
 	m_ray_tracer = RayTracer::Create(m_accelerated_scene, m_camera, m_render_pass, 0);
 }

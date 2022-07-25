@@ -2,12 +2,15 @@
 #define SBVH_HPP
 
 #include "BVHConfig.hpp"
-#include "BinaryBVH.hpp"
+#include "FlatBinaryBVH.hpp"
 #include "Scene.hpp"
 #include <memory>
 #include <vector>
 
 class SBVHBuilder {
+public:
+	using BVHType = FlatBinaryBVH;
+
 private:
 	static constexpr uint32_t kSpatialBinNum = 32;
 
@@ -33,8 +36,7 @@ private:
 		uint32_t m_in{}, m_out{};
 	};
 
-	std::vector<BinaryBVH::Node> m_nodes;
-	uint32_t m_leaf_cnt{};
+	FlatBinaryBVH &m_bvh;
 	const Scene &m_scene;
 	const BVHConfig &m_config;
 
@@ -64,18 +66,15 @@ private:
 	                                  NodeSpec *t_right);
 	uint32_t build_node(const NodeSpec &t_spec, uint32_t t_depth);
 	inline uint32_t push_node() {
-		m_nodes.emplace_back();
-		return m_nodes.size() - 1;
+		m_bvh.m_nodes.emplace_back();
+		return m_bvh.m_nodes.size() - 1;
 	}
 
 public:
-	inline SBVHBuilder(const BVHConfig &config, const Scene &scene)
-	    : m_scene(scene), m_config(config), m_min_overlap_area{scene.GetAABB().GetArea() * 1e-5f} {}
+	inline explicit SBVHBuilder(FlatBinaryBVH *p_bvh)
+	    : m_bvh(*p_bvh), m_scene(*p_bvh->GetScenePtr()),
+	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetArea() * 1e-5f} {}
 	void Run();
-	inline void FetchResult(std::vector<BinaryBVH::Node> *p_nodes, uint32_t *p_leaf_count) {
-		*p_nodes = std::move(m_nodes);
-		*p_leaf_count = m_leaf_cnt;
-	}
 };
 
 #endif

@@ -2,7 +2,7 @@
 #define ADYPT_PARALLELSBVHBUILDER_HPP
 
 #include "AtomicAllocator.hpp"
-#include "BinaryBVH.hpp"
+#include "AtomicBinaryBVH.hpp"
 #include <atomic>
 #include <cfloat>
 #include <concurrentqueue.h>
@@ -13,28 +13,25 @@
 #include <utility>
 
 class ParallelSBVHBuilder {
+public:
+	using BVHType = AtomicBinaryBVH;
+
 private:
 	const uint32_t kThreadCount;
 	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
 	static constexpr uint32_t kParallelForBlockSize = 64;
 	static constexpr uint32_t kLocalRunThreshold = 512;
-	static constexpr uint32_t kAtomicAllocatorChunk = 256;
 
+	AtomicBinaryBVH &m_bvh;
 	const Scene &m_scene;
 	const BVHConfig &m_config;
 	float m_min_overlap_area;
 
-	struct Node {
-		AABB aabb;
-		Node *left{}, *right{};
-		uint32_t tri_idx{}, node_idx{};
-	} m_root{};
-	AtomicAllocator<Node, kAtomicAllocatorChunk> m_node_pool;
+	std::vector<LocalAllocator<AtomicBinaryBVH::Node, AtomicBinaryBVH::kAtomicAllocatorChunk>> m_thread_node_allocators;
 
-	std::vector<LocalAllocator<Node, kAtomicAllocatorChunk>> m_thread_node_allocators;
-
-	std::atomic_uint32_t m_node_count{1};
-	inline Node *new_node(LocalAllocator<Node, kAtomicAllocatorChunk> *p_allocator) {
+	std::atomic_uint32_t m_node_count{1}, m_leaf_count{0};
+	inline AtomicBinaryBVH::Node *
+	new_node(LocalAllocator<AtomicBinaryBVH::Node, AtomicBinaryBVH::kAtomicAllocatorChunk> *p_allocator) {
 		auto ret = p_allocator->Alloc();
 		ret->node_idx = m_node_count++;
 		return ret;
@@ -99,7 +96,7 @@ private:
 	class Task {
 	private:
 		ParallelSBVHBuilder *m_p_builder{};
-		Node *m_node{};
+		AtomicBinaryBVH::Node *m_node{};
 		std::vector<Reference> m_references;
 		uint32_t m_depth{}, m_thread{}, m_thread_count{};
 
@@ -135,7 +132,10 @@ private:
 		inline std::tuple<uint32_t, uint32_t> get_child_thread_counts(uint32_t left_ref_count,
 		                                                              uint32_t right_ref_count) const;
 
-		inline void perform_leaf() { m_node->tri_idx = m_references.front().tri_idx; }
+		inline void perform_leaf() {
+			m_node->tri_idx = m_references.front().tri_idx;
+			++m_p_builder->m_leaf_count;
+		}
 
 		inline ThreadUnit &get_thread_unit(uint32_t idx = 0) const {
 			return m_p_builder->m_thread_group[m_thread + idx - 1];
@@ -147,7 +147,7 @@ private:
 		inline moodycamel::ConsumerToken &get_queue_consumer_token() const {
 			return m_p_builder->m_consumer_tokens[m_thread];
 		}
-		inline Node *new_node() const {
+		inline AtomicBinaryBVH::Node *new_node() const {
 			return m_p_builder->new_node(&m_p_builder->m_thread_node_allocators[m_thread]);
 		}
 		inline void assign_to_thread(uint32_t thread) {
@@ -157,8 +157,8 @@ private:
 
 	public:
 		inline Task() = default;
-		inline Task(ParallelSBVHBuilder *p_builder, Node *node, std::vector<Reference> &&references, uint32_t depth,
-		            uint32_t thread_begin, uint32_t thread_count)
+		inline Task(ParallelSBVHBuilder *p_builder, AtomicBinaryBVH::Node *node, std::vector<Reference> &&references,
+		            uint32_t depth, uint32_t thread_begin, uint32_t thread_count)
 		    : m_p_builder{p_builder}, m_node{node}, m_references{std::move(references)}, m_depth{depth},
 		      m_thread(thread_begin), m_thread_count{thread_count} {}
 		Task(const Task &r) = delete;
@@ -181,16 +181,14 @@ private:
 	std::vector<moodycamel::ConsumerToken> m_consumer_tokens;
 	std::vector<moodycamel::ProducerToken> m_producer_tokens;
 
-	Task get_root_task();
-	// void local_run_task(Task &&task);
-	uint32_t fetch_result(Node *cur, std::vector<BinaryBVH::Node> *p_nodes, uint32_t *p_leaf_count);
+	Task make_root_task();
 
 public:
-	ParallelSBVHBuilder(const BVHConfig &config, const Scene &scene)
-	    : kThreadCount(std::max(1u, std::thread::hardware_concurrency())), m_scene(scene),
-	      m_config(config), m_min_overlap_area{scene.GetAABB().GetArea() * 1e-5f} {}
+	explicit ParallelSBVHBuilder(AtomicBinaryBVH *p_bvh)
+	    : kThreadCount(std::max(1u, std::thread::hardware_concurrency())), m_bvh{*p_bvh},
+	      m_scene(*p_bvh->GetScenePtr()),
+	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetArea() * 1e-5f} {}
 	void Run();
-	void FetchResult(std::vector<BinaryBVH::Node> *p_nodes, uint32_t *p_leaf_count);
 };
 
 #endif

@@ -34,9 +34,10 @@ void SBVHBuilder::sort_spec(const SBVHBuilder::NodeSpec &t_spec, uint32_t dim) {
 
 uint32_t SBVHBuilder::build_leaf(const SBVHBuilder::NodeSpec &t_spec) {
 	uint32_t node = push_node();
-	m_nodes[node].aabb = t_spec.m_aabb;
-	m_nodes[node].left_idx = UINT32_MAX; // mark to -1 for leaf
-	m_nodes[node].tri_idx = m_refstack.back().m_tri_index;
+	m_bvh.m_nodes[node].aabb = t_spec.m_aabb;
+	m_bvh.m_nodes[node].left_idx = UINT32_MAX; // mark to -1 for leaf
+	m_bvh.m_nodes[node].tri_idx = m_refstack.back().m_tri_index;
+	++m_bvh.m_leaf_cnt;
 	m_refstack.pop_back();
 	return node;
 }
@@ -291,7 +292,7 @@ uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 	}
 
 	uint32_t node = push_node(); // alloc new node
-	m_nodes[node].aabb = t_spec.m_aabb;
+	m_bvh.m_nodes[node].aabb = t_spec.m_aabb;
 
 	NodeSpec left, right;
 	left.m_ref_num = right.m_ref_num = 0;
@@ -304,7 +305,7 @@ uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 	build_node(right, t_depth + 1);
 	// use a temp variable to get the return value()
 	uint32_t lidx = build_node(left, t_depth + 1);
-	m_nodes[node].left_idx = lidx;
+	m_bvh.m_nodes[node].left_idx = lidx;
 
 	return node;
 }
@@ -320,13 +321,13 @@ void SBVHBuilder::Run() {
 		m_refstack[i].m_aabb = m_scene.GetTriangles()[i].GetAABB();
 	}
 
-	m_nodes.reserve(m_scene.GetTriangles().size() * 2);
+	m_bvh.m_nodes.reserve(m_scene.GetTriangles().size() * 2);
 
 	auto start = std::chrono::steady_clock::now();
 	build_node({m_scene.GetAABB(), (uint32_t)m_scene.GetTriangles().size()}, 0);
 
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-	spdlog::info("SBVH built with {} nodes in {} ms", m_nodes.size(), duration.count());
+	spdlog::info("SBVH built with {} nodes in {} ms", m_bvh.m_nodes.size(), duration.count());
 
-	m_nodes.shrink_to_fit();
+	m_bvh.m_nodes.shrink_to_fit();
 }

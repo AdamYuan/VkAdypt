@@ -38,7 +38,9 @@ add_executable(Adypt
         src/UIHelper.cpp
 
         # BVH
-        src/BinaryBVH.hpp
+        src/BinaryBVHBase.hpp
+        src/FlatBinaryBVH.hpp
+        src/AtomicBinaryBVH.hpp
 
         src/SBVHBuilder.hpp
         src/SBVHBuilder.cpp
@@ -46,7 +48,6 @@ add_executable(Adypt
         src/ParallelSBVHBuilder.hpp
 
         src/WideBVH.hpp
-        src/WideBVH.cpp
         # src/WideBVHBuilder.cpp
         src/BVHConfig.hpp
         src/BVHConfig.cpp
@@ -59,7 +60,8 @@ add_executable(Adypt
         src/Shape.hpp
         src/Scene.hpp
         src/Scene.cpp
-        src/ParallelSort.hpp)
+        src/ParallelSort.hpp
+        )
 
 # find_package(OpenMP)
 # if(OpenMP_CXX_FOUND)

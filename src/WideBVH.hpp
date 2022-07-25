@@ -1,10 +1,12 @@
 #ifndef ADYPT_WIDEBVH_HPP
 #define ADYPT_WIDEBVH_HPP
 
-#include "BinaryBVH.hpp"
+#include "BinaryBVHBase.hpp"
 #include <cinttypes>
 #include <memory>
 #include <vector>
+
+#include "WideBVHDecl.inl"
 
 class WideBVH {
 public:
@@ -35,11 +37,13 @@ private:
 public:
 	WideBVH(const BVHConfig &config, std::shared_ptr<Scene> scene) : m_config{config}, m_scene_ptr{std::move(scene)} {}
 
-	static std::shared_ptr<WideBVH> Build(const std::shared_ptr<BinaryBVH> &bin_bvh);
-	// static std::shared_ptr<WideBVH> CreateFromFile(const char *filename, const BVHConfig &expected_config);
-
-	bool SaveToFile(const char *filename);
-
+	template <class BVHType>
+	static std::shared_ptr<WideBVH> Build(const std::shared_ptr<BinaryBVHBase<BVHType>> &bin_bvh) {
+		std::shared_ptr<WideBVH> ret = std::make_shared<WideBVH>(bin_bvh->GetConfig(), bin_bvh->GetScenePtr());
+		wide_bvh_detail::WideBVHBuilder<BVHType> builder{ret.get(), *bin_bvh};
+		builder.Run();
+		return ret;
+	}
 	const std::shared_ptr<Scene> &GetScenePtr() const { return m_scene_ptr; }
 
 	const BVHConfig &GetConfig() const { return m_config; }
@@ -47,7 +51,9 @@ public:
 	const std::vector<Node> &GetNodes() const { return m_nodes; }
 	const std::vector<uint32_t> &GetTriIndices() const { return m_tri_indices; }
 
-	friend class WideBVHBuilder;
+	template <class BVHType> friend class wide_bvh_detail::WideBVHBuilder;
 };
+
+#include "WideBVHImpl.inl"
 
 #endif
