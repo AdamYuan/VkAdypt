@@ -27,7 +27,7 @@ std::tuple<uint32_t, typename WideBVHBuilder<BVHType>::NodeSAHGroup>
 WideBVHBuilder<BVHType>::calculate_cost(BVHIterator node) {
 	NodeSAHGroup sah;
 
-	float area = node.GetAABB().GetArea();
+	float area = node.GetAABB().GetHalfArea();
 	// is leaf, then initialize
 	auto node_idx = node.GetIndex();
 	if (node.IsLeaf()) {
