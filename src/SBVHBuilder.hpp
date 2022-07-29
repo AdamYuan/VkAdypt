@@ -73,7 +73,7 @@ private:
 public:
 	inline explicit SBVHBuilder(FlatBinaryBVH *p_bvh)
 	    : m_bvh(*p_bvh), m_scene(*p_bvh->GetScenePtr()),
-	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetHalfArea() * 1e-5f} {}
+	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetArea() * 1e-5f} {}
 	void Run();
 };
 

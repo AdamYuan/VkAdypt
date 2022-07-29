@@ -35,9 +35,9 @@ struct AABB {
 	template <int DIM> inline float GetDimCenter() const { return (min[DIM] + max[DIM]) * 0.5f; }
 	inline float GetDimCenter(int dim) const { return (min[dim] + max[dim]) * 0.5f; }
 	inline glm::vec3 GetExtent() const { return max - min; }
-	inline float GetHalfArea() const {
+	inline float GetArea() const {
 		glm::vec3 extent = GetExtent();
-		return (extent.x * (extent.y + extent.z) + extent.y * extent.z);
+		return (extent.x * (extent.y + extent.z) + extent.y * extent.z) * 2.0f;
 	}
 };
 

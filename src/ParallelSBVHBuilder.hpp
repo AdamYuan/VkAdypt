@@ -39,8 +39,6 @@ private:
 	AtomicAllocator<Reference> m_reference_pool;
 	std::vector<LocalAllocator<Reference>> m_thread_reference_allocators;
 
-	std::vector<std::vector<uint32_t>> m_thread_tmp_references;
-
 	template <uint32_t DIM, typename Iter> inline void sort_references(Iter first_ref, Iter last_ref);
 	template <typename Iter> inline void sort_references(Iter first_ref, Iter last_ref, uint32_t dim);
 	inline std::tuple<Reference, Reference> split_reference(const Reference &ref, uint32_t dim, float pos) const;
@@ -101,18 +99,7 @@ private:
 		struct ObjectSplit {
 			AABB left_aabb, right_aabb;
 			uint32_t dim{};
-			float sah{FLT_MAX};
-			bool use_bins{};
-			union {
-				struct {
-					uint32_t bin_pos;
-					float bin_base, inv_bin_width;
-				} binned{};
-				struct {
-					uint32_t left_num;
-					float pos;
-				} swept;
-			};
+			float pos{}, sah{FLT_MAX}, bin_width{};
 		};
 		struct ObjectBin {
 			AABB aabb{};
@@ -131,15 +118,12 @@ private:
 		inline void _find_spatial_split_parallel(SpatialSplit *p_ss);
 		inline SpatialSplit find_spatial_split();
 		inline std::tuple<Task, Task> perform_spatial_split(const SpatialSplit &ss);
-		inline std::tuple<Task, Task> perform_spatial_split_parallel(const SpatialSplit &ss);
 
-		template <uint32_t DIM> inline void _find_swept_object_split_dim(ObjectSplit *p_sos);
-		template <uint32_t DIM> inline void _find_binned_object_split_dim(ObjectSplit *p_bos);
-		inline void _find_binned_object_split_parallel(ObjectSplit *p_bos);
+		template <uint32_t DIM> inline void _find_object_split_sweep_dim(ObjectSplit *p_os);
+		template <uint32_t DIM> inline void _find_object_split_binned_dim(ObjectSplit *p_os);
+		inline void _find_object_split_binned_parallel(ObjectSplit *p_os);
 		inline ObjectSplit find_object_split();
 		inline std::tuple<Task, Task> perform_object_split(const ObjectSplit &os);
-		inline std::tuple<Task, Task> _perform_binned_object_split(const ObjectSplit &bos);
-		inline std::tuple<Task, Task> _perform_swept_object_split(const ObjectSplit &sos);
 
 		inline std::tuple<uint32_t, uint32_t> get_child_thread_counts(uint32_t left_ref_count,
 		                                                              uint32_t right_ref_count) const;
@@ -168,12 +152,6 @@ private:
 		}
 		inline moodycamel::ConsumerToken &get_queue_consumer_token() const {
 			return m_p_builder->m_consumer_tokens[m_thread];
-		}
-		inline std::vector<uint32_t> &get_tmp_references(uint32_t cnt) const {
-			auto &ret = m_p_builder->m_thread_tmp_references[cnt];
-			if (ret.size() < cnt)
-				ret.resize(cnt);
-			return ret;
 		}
 		inline uint32_t new_node() const { return m_p_builder->m_thread_node_allocators[m_thread].Alloc(); }
 		inline uint32_t new_reference() const { return m_p_builder->m_thread_reference_allocators[m_thread].Alloc(); }
@@ -210,7 +188,7 @@ public:
 	explicit ParallelSBVHBuilder(AtomicBinaryBVH *p_bvh)
 	    : kThreadCount(std::max(1u, std::thread::hardware_concurrency())), m_bvh{*p_bvh},
 	      m_node_pool{p_bvh->m_node_pool}, m_scene(*p_bvh->GetScenePtr()),
-	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetHalfArea() * 1e-5f} {}
+	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetArea() * 1e-5f} {}
 	void Run();
 };
 
