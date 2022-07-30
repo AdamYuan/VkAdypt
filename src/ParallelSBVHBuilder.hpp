@@ -21,6 +21,7 @@ private:
 	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
 	static constexpr uint32_t kParallelForBlockSize = 64;
 	static constexpr uint32_t kLocalRunThreshold = 512;
+	static constexpr uint32_t kSpatialSplitUnsplitThreshold = 16;
 
 	AtomicBinaryBVH &m_bvh;
 	const Scene &m_scene;
@@ -38,6 +39,7 @@ private:
 	};
 	AtomicAllocator<Reference> m_reference_pool;
 	std::vector<LocalAllocator<Reference>> m_thread_reference_allocators;
+	// std::vector<std::vector<uint32_t>> m_thread_tmp_references;
 
 	template <uint32_t DIM, typename Iter> inline void sort_references(Iter first_ref, Iter last_ref);
 	template <typename Iter> inline void sort_references(Iter first_ref, Iter last_ref, uint32_t dim);
@@ -118,12 +120,18 @@ private:
 		inline void _find_spatial_split_parallel(SpatialSplit *p_ss);
 		inline SpatialSplit find_spatial_split();
 		inline std::tuple<Task, Task> perform_spatial_split(const SpatialSplit &ss);
+		inline std::tuple<Task, Task> _perform_spatial_split(const SpatialSplit &ss);
+		// inline std::tuple<Task, Task> _perform_spatial_split_parallel(const SpatialSplit &ss);
 
 		template <uint32_t DIM> inline void _find_object_split_sweep_dim(ObjectSplit *p_os);
 		template <uint32_t DIM> inline void _find_object_split_binned_dim(ObjectSplit *p_os);
 		inline void _find_object_split_binned_parallel(ObjectSplit *p_os);
 		inline ObjectSplit find_object_split();
 		inline std::tuple<Task, Task> perform_object_split(const ObjectSplit &os);
+		inline std::tuple<Task, Task> _perform_object_split(const ObjectSplit &os);
+		// inline std::tuple<Task, Task> _perform_object_split_parallel(const ObjectSplit &os);
+
+		inline std::tuple<Task, Task> perform_default_split();
 
 		inline std::tuple<uint32_t, uint32_t> get_child_thread_counts(uint32_t left_ref_count,
 		                                                              uint32_t right_ref_count) const;
@@ -153,8 +161,16 @@ private:
 		inline moodycamel::ConsumerToken &get_queue_consumer_token() const {
 			return m_p_builder->m_consumer_tokens[m_thread];
 		}
+		/* inline std::vector<uint32_t> &get_tmp_references(uint32_t ref_num) const {
+		    auto &ret = m_p_builder->m_thread_tmp_references[m_thread];
+		    if (ret.size() < ref_num)
+		        ret.resize(ref_num);
+		    return ret;
+		} */
 		inline uint32_t new_node() const { return m_p_builder->m_thread_node_allocators[m_thread].Alloc(); }
-		inline uint32_t new_reference() const { return m_p_builder->m_thread_reference_allocators[m_thread].Alloc(); }
+		inline uint32_t new_reference(uint32_t idx = 0) const {
+			return m_p_builder->m_thread_reference_allocators[m_thread + idx].Alloc();
+		}
 
 	public:
 		inline Task() = default;
