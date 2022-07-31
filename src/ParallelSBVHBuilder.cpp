@@ -35,22 +35,31 @@ ParallelSBVHBuilder::Task ParallelSBVHBuilder::make_root_task() {
 	uint32_t root_idx = m_thread_node_allocators[0].Alloc();
 	assert(root_idx == 0);
 	m_node_pool[root_idx].aabb = m_scene.GetAABB();
-	std::vector<uint32_t> references;
+	auto [reference_block, tmp_reference_block, reference_block_size] =
+	    alloc_reference_block(m_scene.GetTriangles().size());
 	{
-		references.reserve(m_scene.GetTriangles().size());
 		for (uint32_t i = 0; i < m_scene.GetTriangles().size(); ++i) {
 			uint32_t ref_idx = m_thread_reference_allocators[0].Alloc();
 			auto &ref = m_reference_pool[ref_idx];
 			ref.tri_idx = i;
 			ref.aabb = m_scene.GetTriangles()[i].GetAABB();
-			references.push_back(ref_idx);
+			reference_block[i] = ref_idx;
 		}
 	}
-	return Task{this, root_idx, std::move(references), 0, 0, kThreadCount};
+	return Task{this,
+	            root_idx,
+	            Task::kAlignLeft,
+	            (uint32_t)m_scene.GetTriangles().size(),
+	            reference_block_size,
+	            reference_block,
+	            tmp_reference_block,
+	            0,
+	            0,
+	            kThreadCount};
 }
 
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBuilder::Task::Run() {
-	if (m_references.size() == 1) {
+	if (m_reference_count == 1) {
 		make_leaf();
 		return {};
 	}
@@ -106,9 +115,9 @@ void ParallelSBVHBuilder::Task::BlockRun() {
 		Task task;
 		while (m_p_builder->m_task_count.load()) {
 			if (m_p_builder->m_task_queue.try_dequeue(get_queue_consumer_token(), task)) {
-				task.assign_to_thread(m_thread);
+				task.AssignToThread(m_thread);
 
-				if (task.m_references.size() <= kLocalRunThreshold) {
+				if (m_reference_count <= kLocalRunThreshold) {
 					task.LocalRun();
 					--m_p_builder->m_task_count;
 				} else {
@@ -179,13 +188,40 @@ ParallelSBVHBuilder::split_reference(const ParallelSBVHBuilder::Reference &ref, 
 	return {left, right};
 }
 
-std::tuple<uint32_t, uint32_t> ParallelSBVHBuilder::Task::get_child_thread_counts(uint32_t left_ref_count,
-                                                                                  uint32_t right_ref_count) const {
+uint32_t ParallelSBVHBuilder::Task::split_thread(uint32_t left_ref_count, uint32_t right_ref_count) const {
 	if (m_thread_count == 0)
-		return {0u, 0u};
+		return 0u;
 	auto lt = (float)left_ref_count, tt = float(left_ref_count + right_ref_count);
-	auto lc = std::clamp(uint32_t(glm::round(lt / tt * float(m_thread_count))), 0u, m_thread_count);
-	return {lc, m_thread_count - lc};
+	return std::clamp(uint32_t(glm::round(lt / tt * float(m_thread_count))), 0u, m_thread_count);
+}
+
+uint32_t ParallelSBVHBuilder::Task::split_reference_block(uint32_t left_ref_count, uint32_t right_ref_count,
+                                                          uint32_t ref_block_size) {
+	auto lt = (float)left_ref_count, tt = float(left_ref_count + right_ref_count);
+	return std::clamp(uint32_t(glm::round(lt / tt * float(ref_block_size))), left_ref_count,
+	                  ref_block_size - right_ref_count);
+}
+std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
+ParallelSBVHBuilder::Task::split_task_with_block(uint32_t left_ref_count, uint32_t right_ref_count,
+                                                 uint32_t ref_block_size, uint32_t *ref_block,
+                                                 uint32_t *tmp_ref_block) const {
+	uint32_t left_thread_count = split_thread(left_ref_count, right_ref_count);
+	uint32_t left_ref_block_size = split_reference_block(left_ref_count, right_ref_count, ref_block_size);
+	auto &node = access_node(m_node_index);
+	return {Task{m_p_builder, node.left, kAlignLeft, left_ref_count, left_ref_block_size, ref_block, tmp_ref_block,
+	             m_depth + 1, m_thread, left_thread_count},
+	        Task{m_p_builder, node.right, kAlignRight, right_ref_count, ref_block_size - left_ref_block_size,
+	             ref_block + left_ref_block_size, tmp_ref_block + left_ref_block_size, m_depth + 1,
+	             m_thread + left_thread_count, m_thread_count - left_thread_count}};
+}
+std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
+ParallelSBVHBuilder::Task::split_task(uint32_t left_ref_count, uint32_t right_ref_count, bool swap_to_tmp) const {
+	if (swap_to_tmp)
+		return split_task_with_block(left_ref_count, right_ref_count, m_reference_block_size, m_tmp_reference_block,
+		                             m_reference_block);
+	else
+		return split_task_with_block(left_ref_count, right_ref_count, m_reference_block_size, m_reference_block,
+		                             m_tmp_reference_block);
 }
 /*
  Spatial split
@@ -195,13 +231,14 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_spatial_split_dim(
 	thread_local AABB right_aabbs[kSpatialBinNum];
 
 	std::fill(spatial_bins, spatial_bins + kSpatialBinNum, SpatialBin{AABB(), 0, 0}); // initialize bins
-	auto &node = access_node(m_node_idx);
+	auto &node = access_node(m_node_index);
 	const float bin_width = node.aabb.GetExtent()[DIM] / kSpatialBinNum, inv_bin_width = 1.0f / bin_width;
 	const float bound_base = node.aabb.min[DIM];
 
 	// Put references into bins
-	for (uint32_t ref_idx : m_references) {
-		const auto &ref = access_reference(ref_idx);
+	auto ref_begin = get_reference_begin();
+	for (uint32_t i = 0; i < m_reference_count; ++i) {
+		const auto &ref = access_reference(ref_begin[i]);
 		uint32_t bin = glm::clamp(uint32_t((ref.aabb.min[DIM] - bound_base) * inv_bin_width), 0u, kSpatialBinNum - 1);
 		uint32_t last_bin =
 		    glm::clamp(uint32_t((ref.aabb.max[DIM] - bound_base) * inv_bin_width), 0u, kSpatialBinNum - 1);
@@ -225,7 +262,7 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_spatial_split_dim(
 
 	// Find optimal spatial split
 	AABB left_aabb = spatial_bins[0].aabb;
-	uint32_t left_num = 0, right_num = m_references.size();
+	uint32_t left_num = 0, right_num = m_reference_count;
 	for (uint32_t i = 1; i < kSpatialBinNum; ++i) {
 		left_num += spatial_bins[i - 1].in;
 		right_num -= spatial_bins[i - 1].out;
@@ -235,28 +272,30 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_spatial_split_dim(
 			p_ss->sah = sah;
 			p_ss->dim = DIM;
 			p_ss->pos = bound_base + float(i) * bin_width;
+			p_ss->ref_cnt = left_num + right_num;
 		}
 
 		left_aabb.Expand(spatial_bins[i].aabb);
 	}
 }
 void ParallelSBVHBuilder::Task::_find_spatial_split_parallel(ParallelSBVHBuilder::Task::SpatialSplit *p_ss) {
-	auto &node = access_node(m_node_idx);
+	auto &node = access_node(m_node_index);
 
 	const glm::vec3 &bin_bases = node.aabb.min;
 	const glm::vec3 bin_widths = node.aabb.GetExtent() / (float)kSpatialBinNum, inv_bin_widths = 1.0f / bin_widths;
 	std::atomic_uint32_t counter{0};
 
-	auto compute_spatial_bins_func = [this, &bin_bases, &bin_widths, &inv_bin_widths, &counter]() {
+	auto ref_begin = get_reference_begin();
+	auto compute_spatial_bins_func = [this, ref_begin, &bin_bases, &bin_widths, &inv_bin_widths, &counter]() {
 		std::array<std::array<ParallelSBVHBuilder::Task::SpatialBin, ParallelSBVHBuilder::kSpatialBinNum>, 3> ret{};
 
-		for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_references.size();
+		for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_reference_count;
 		     cur_block = counter++) {
 			uint32_t cur_first = cur_block * kParallelForBlockSize,
-			         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, (uint32_t)m_references.size());
+			         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, m_reference_count);
 
 			for (uint32_t cur = cur_first; cur < cur_last; ++cur) {
-				const auto &ref = access_reference(m_references[cur]);
+				const auto &ref = access_reference(ref_begin[cur]);
 				glm::u32vec3 bins =
 				    glm::clamp(glm::u32vec3((ref.aabb.min - bin_bases) * inv_bin_widths), 0u, kSpatialBinNum - 1);
 				glm::u32vec3 last_bins =
@@ -312,7 +351,7 @@ void ParallelSBVHBuilder::Task::_find_spatial_split_parallel(ParallelSBVHBuilder
 
 		// Find optimal spatial split
 		AABB left_aabb = dim_bins[0].aabb;
-		uint32_t left_num = 0, right_num = m_references.size();
+		uint32_t left_num = 0, right_num = m_reference_count;
 		for (uint32_t i = 1; i < kSpatialBinNum; ++i) {
 			left_num += dim_bins[i - 1].in;
 			right_num -= dim_bins[i - 1].out;
@@ -322,6 +361,7 @@ void ParallelSBVHBuilder::Task::_find_spatial_split_parallel(ParallelSBVHBuilder
 				p_ss->sah = sah;
 				p_ss->dim = dim;
 				p_ss->pos = bin_bases[dim] + float(i) * bin_widths[dim];
+				p_ss->ref_cnt = left_num + right_num;
 			}
 
 			left_aabb.Expand(dim_bins[i].aabb);
@@ -346,110 +386,100 @@ ParallelSBVHBuilder::Task::perform_spatial_split(const SpatialSplit &ss) {
 }
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
 ParallelSBVHBuilder::Task::_perform_spatial_split(const SpatialSplit &ss) {
-	auto &node = access_node(m_node_idx);
-	if (!node.left)
-		node.left = new_node();
-	if (!node.right)
-		node.right = new_node();
-
-	auto &left_node = access_node(node.left), &right_node = access_node(node.right);
+	auto [left_node, right_node] = maintain_child_nodes();
 	left_node.aabb = right_node.aabb = AABB();
 
-	// separate the bound into 3 parts
-	//[left_begin, left_end) - totally left part
-	//[left_end, right_begin) - the part to split
-	//[right_begin, right_end) - totally right part
-	constexpr uint32_t left_begin = 0;
-	uint32_t left_end = 0, right_begin = m_references.size(), right_end = m_references.size();
-	for (uint32_t i = left_begin; i < right_begin; ++i) {
-		// put to left
-		const auto &ref = access_reference(m_references[i]);
+	auto ref_begin = get_reference_begin();
+
+	uint32_t *ref_block = m_reference_block, *tmp_ref_block = m_tmp_reference_block,
+	         ref_block_size = m_reference_block_size;
+	if (ss.ref_cnt > m_reference_block_size) {
+		std::tie(ref_block, tmp_ref_block, ref_block_size) = m_p_builder->alloc_reference_block(ss.ref_cnt);
+	}
+	uint32_t *tmp_ref_block_begin = tmp_ref_block, *tmp_ref_block_end = tmp_ref_block + ref_block_size;
+
+	uint32_t left_num = 0, right_num = 0;
+	uint32_t split_num = 0; // The number of references to splitted
+	for (uint32_t i = 0; i < m_reference_count; ++i) {
+		uint32_t ref_idx = ref_begin[i];
+		const auto &ref = access_reference(ref_idx);
 		if (ref.aabb.max[(int)ss.dim] <= ss.pos) {
 			left_node.aabb.Expand(ref.aabb);
-			std::swap(m_references[i], m_references[left_end++]);
+			*(tmp_ref_block_begin + (left_num++)) = ref_idx;
 		} else if (ref.aabb.min[(int)ss.dim] >= ss.pos) {
 			right_node.aabb.Expand(ref.aabb);
-			std::swap(m_references[i--], m_references[--right_begin]);
-		}
+			*(tmp_ref_block_end - (++right_num)) = ref_idx;
+		} else
+			std::swap(ref_begin[i], ref_begin[split_num++]);
 	}
 
-	if ((left_begin == left_end || right_begin == right_end) && left_end == right_begin) {
+	if ((left_num == 0 || right_num == 0) && split_num == 0)
 		return {};
-	}
 
-	if (right_begin - left_end < kSpatialSplitUnsplitThreshold) {
-		AABB lub; // Unsplit to left:     new left-hand bounds.
-		AABB rub; // Unsplit to right:    new right-hand bounds.
-		AABB lsb; // Split:               new left-hand bounds.
-		AABB rsb; // Split:               new right-hand bounds.
-		while (left_end < right_begin) {
-			auto &cur_ref = access_reference(m_references[left_end]);
-			auto [left_ref, right_ref] = m_p_builder->split_reference(cur_ref, ss.dim, ss.pos);
+	AABB lub; // Unsplit to left:     new left-hand bounds.
+	AABB rub; // Unsplit to right:    new right-hand bounds.
+	AABB lsb; // Split:               new left-hand bounds.
+	AABB rsb; // Split:               new right-hand bounds.
+	for (uint32_t i = 0; i < split_num; ++i) {
+		uint32_t ref_idx = ref_begin[i];
+		const auto &ref = access_reference(ref_idx);
+		auto [left_ref, right_ref] = m_p_builder->split_reference(ref, ss.dim, ss.pos);
 
-			lub = lsb = left_node.aabb;
-			rub = rsb = right_node.aabb;
+		AABB lb = AABB{left_node.aabb, ref.aabb};
+		AABB rb = AABB{right_node.aabb, ref.aabb};
+		float left_sah = lb.GetArea() * float(1 + left_num) + right_node.aabb.GetArea() * float(right_num);
+		float right_sah = left_node.aabb.GetArea() * float(left_num) + rb.GetArea() * float(1 + right_num);
 
-			lub.Expand(cur_ref.aabb);
-			rub.Expand(cur_ref.aabb);
-			lsb.Expand(left_ref.aabb);
-			rsb.Expand(right_ref.aabb);
+		lub = lsb = left_node.aabb;
+		rub = rsb = right_node.aabb;
 
-			auto lac = float(left_end - left_begin);
-			auto rac = float(right_end - right_begin);
-			auto lbc = float(1 + left_end - left_begin);
-			auto rbc = float(1 + right_end - right_begin);
+		lub.Expand(ref.aabb);
+		rub.Expand(ref.aabb);
+		lsb.Expand(left_ref.aabb);
+		rsb.Expand(right_ref.aabb);
 
-			float unsplit_left_sah = lub.GetArea() * lbc + right_node.aabb.GetArea() * rac;
-			float unsplit_right_sah = left_node.aabb.GetArea() * lac + rub.GetArea() * rbc;
-			float split_sah = lsb.GetArea() * lbc + rsb.GetArea() * rbc;
+		float unsplit_left_sah = lub.GetArea() * float(1 + left_num) + right_node.aabb.GetArea() * float(right_num);
+		float unsplit_right_sah = left_node.aabb.GetArea() * float(left_num) + rub.GetArea() * float(1 + right_num);
+		float split_sah = lsb.GetArea() * float(1 + left_num) + rsb.GetArea() * float(1 + right_num);
 
-			if (unsplit_left_sah < unsplit_right_sah && unsplit_left_sah < split_sah &&
-			    right_begin < right_end) { // unsplit to left
-				left_node.aabb = lub;
-				++left_end;
-			} else if (unsplit_right_sah < split_sah && left_begin < left_end) { // unsplit to right
-				right_node.aabb = rub;
-				std::swap(m_references[left_end], m_references[--right_begin]);
-			} else { // duplicate
-				m_references.emplace_back();
-				left_node.aabb = lsb;
-				right_node.aabb = rsb;
+		if (unsplit_left_sah < unsplit_right_sah && unsplit_left_sah < split_sah && right_num > 0) { // unsplit to left
+			left_node.aabb = lub;
+			*(tmp_ref_block_begin + (left_num++)) = ref_idx;
+		} else if (unsplit_right_sah < split_sah && left_num > 0) { // unsplit to right
+			right_node.aabb = rub;
+			*(tmp_ref_block_end - (++right_num)) = ref_idx;
+		} else { // duplicate
+			left_node.aabb = lsb;
+			right_node.aabb = rsb;
 
-				cur_ref = left_ref;
-				uint32_t right_ref_idx = new_reference();
-				access_reference(right_ref_idx) = right_ref;
-				++left_end;
-				// m_references[left_end++] = p_left_ref;
-				m_references[right_end++] = right_ref_idx;
-			}
-		}
-	} else {
-		while (left_end < right_begin) {
-			auto &cur_ref = access_reference(m_references[left_end]);
-			auto [left_ref, right_ref] = m_p_builder->split_reference(cur_ref, ss.dim, ss.pos);
-
-			left_node.aabb.Expand(left_ref.aabb);
-			right_node.aabb.Expand(right_ref.aabb);
-			m_references.emplace_back();
-
-			cur_ref = left_ref;
+			access_reference(ref_idx) = left_ref;
 			uint32_t right_ref_idx = new_reference();
 			access_reference(right_ref_idx) = right_ref;
-			++left_end;
-			m_references[right_end++] = right_ref_idx;
+
+			*(tmp_ref_block_begin + (left_num++)) = ref_idx;
+			*(tmp_ref_block_end - (++right_num)) = right_ref_idx;
 		}
 	}
+	/* for (uint32_t i = 0; i < split_num; ++i) {
+	    uint32_t ref_idx = ref_begin[i];
+	    const auto &ref = access_reference(ref_idx);
+	    auto [left_ref, right_ref] = m_p_builder->split_reference(ref, ss.dim, ss.pos);
 
-	assert(left_begin < left_end && right_begin < right_end);
+	    left_node.aabb.Expand(left_ref.aabb);
+	    right_node.aabb.Expand(right_ref.aabb);
 
-	std::vector<uint32_t> &left_refs = m_references;
-	std::vector<uint32_t> right_refs{m_references.begin() + right_begin, m_references.begin() + right_end};
-	left_refs.resize(left_end - left_begin);
+	    access_reference(ref_idx) = left_ref;
+	    uint32_t right_ref_idx = new_reference();
+	    access_reference(right_ref_idx) = right_ref;
 
-	auto [left_thread_count, right_thread_count] = get_child_thread_counts(left_refs.size(), right_refs.size());
-	return {Task{m_p_builder, node.left, std::move(left_refs), m_depth + 1, m_thread, left_thread_count},
-	        Task{m_p_builder, node.right, std::move(right_refs), m_depth + 1, m_thread + left_thread_count,
-	             right_thread_count}};
+	    push_ref_block_left(tmp_ref_block_begin, left_num++, ref_idx);
+	    push_ref_block_right(tmp_ref_block_end, right_num++, right_ref_idx);
+	} */
+
+	if (left_num == 0 || right_num == 0)
+		return {};
+
+	return split_task_with_block(left_num, right_num, ref_block_size, tmp_ref_block, ref_block);
 }
 /* std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
 ParallelSBVHBuilder::Task::_perform_spatial_split_parallel(const SpatialSplit &ss) {
@@ -554,25 +584,26 @@ ParallelSBVHBuilder::Task::_perform_spatial_split_parallel(const SpatialSplit &s
  */
 template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_object_split_sweep_dim(ObjectSplit *p_os) {
 	// Sort first
-	m_p_builder->sort_references<DIM>(m_references.begin(), m_references.end());
+	auto ref_begin = get_reference_begin();
+	m_p_builder->sort_references<DIM>(ref_begin, ref_begin + m_reference_count);
 
 	// Preprocess right_aabbs
 	thread_local std::vector<AABB> right_aabbs{};
 
-	if (right_aabbs.size() < m_references.size())
-		right_aabbs.resize(m_references.size());
-	right_aabbs[m_references.size() - 1] = access_reference(m_references.back()).aabb;
-	for (int32_t i = (int32_t)m_references.size() - 2; i >= 1; --i)
-		right_aabbs[i] = AABB(access_reference(m_references[i]).aabb, right_aabbs[i + 1]);
+	if (right_aabbs.size() < m_reference_count)
+		right_aabbs.resize(m_reference_count);
+	right_aabbs[m_reference_count - 1] = access_reference(ref_begin[m_reference_count - 1]).aabb;
+	for (int32_t i = (int32_t)m_reference_count - 2; i >= 1; --i)
+		right_aabbs[i] = AABB(access_reference(ref_begin[i]).aabb, right_aabbs[i + 1]);
 
 	// Find optimal object split
-	AABB left_aabb = access_reference(m_references.front()).aabb;
-	for (uint32_t i = 1; i < m_references.size(); ++i) {
-		float sah = float(i) * left_aabb.GetArea() + float(m_references.size() - i) * right_aabbs[i].GetArea();
+	AABB left_aabb = access_reference(ref_begin[0]).aabb;
+	for (uint32_t i = 1; i < m_reference_count; ++i) {
+		float sah = float(i) * left_aabb.GetArea() + float(m_reference_count - i) * right_aabbs[i].GetArea();
 		if (sah < p_os->sah) {
 			p_os->dim = DIM;
-			p_os->pos = (access_reference(m_references[i - 1]).aabb.GetDimCenter<DIM>() +
-			             access_reference(m_references[i]).aabb.GetDimCenter<DIM>()) *
+			p_os->pos = (access_reference(ref_begin[i - 1]).aabb.GetDimCenter<DIM>() +
+			             access_reference(ref_begin[i]).aabb.GetDimCenter<DIM>()) *
 			            0.5f;
 			p_os->left_aabb = left_aabb;
 			p_os->right_aabb = right_aabbs[i];
@@ -580,16 +611,18 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_object_split_sweep
 			p_os->bin_width = 0.0f;
 		}
 
-		left_aabb.Expand(access_reference(m_references[i]).aabb);
+		left_aabb.Expand(access_reference(ref_begin[i]).aabb);
 	}
 }
 template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_object_split_binned_dim(ObjectSplit *p_os) {
 	thread_local ObjectBin object_bins[kObjectBinNum];
 	thread_local AABB right_aabbs[kObjectBinNum];
 
+	auto ref_begin = get_reference_begin();
+
 	float bound_min = FLT_MAX, bound_max = -FLT_MAX;
-	for (uint32_t ref_idx : m_references) {
-		const auto &ref = access_reference(ref_idx);
+	for (uint32_t i = 0; i < m_reference_count; ++i) {
+		const auto &ref = access_reference(ref_begin[i]);
 		float c = ref.aabb.GetDimCenter<DIM>();
 		bound_max = std::max(bound_max, c);
 		bound_min = std::min(bound_min, c);
@@ -600,8 +633,8 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_object_split_binne
 	const float bound_base = bound_min; // m_node->aabb.min[DIM];
 
 	// Put references into bins according to centers
-	for (uint32_t ref_idx : m_references) {
-		const auto &ref = access_reference(ref_idx);
+	for (uint32_t i = 0; i < m_reference_count; ++i) {
+		const auto &ref = access_reference(ref_begin[i]);
 		uint32_t bin =
 		    glm::clamp(uint32_t((ref.aabb.GetDimCenter<DIM>() - bound_base) * inv_bin_width), 0u, kObjectBinNum - 1);
 		object_bins[bin].aabb.Expand(ref.aabb);
@@ -618,7 +651,7 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_object_split_binne
 	uint32_t left_num = 0;
 	for (uint32_t i = 1; i < kObjectBinNum; ++i) {
 		left_num += object_bins[i - 1].cnt;
-		uint32_t right_num = m_references.size() - left_num;
+		uint32_t right_num = m_reference_count - left_num;
 
 		float sah = float(left_num) * left_aabb.GetArea() + float(right_num) * right_aabbs[i].GetArea();
 		if (sah < p_os->sah && left_num > 0 && right_num > 0) {
@@ -634,17 +667,19 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_object_split_binne
 	}
 }
 void ParallelSBVHBuilder::Task::_find_object_split_binned_parallel(ObjectSplit *p_os) {
+	auto ref_begin = get_reference_begin();
+
 	AABB center_bound;
 	{ // Parallel compute center bound
 		std::atomic_uint32_t counter{0};
-		auto compute_center_bound_func = [this, &counter]() {
+		auto compute_center_bound_func = [this, ref_begin, &counter]() {
 			AABB ret{};
-			for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_references.size();
+			for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_reference_count;
 			     cur_block = counter++) {
 				uint32_t cur_first = cur_block * kParallelForBlockSize,
-				         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, (uint32_t)m_references.size());
+				         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, m_reference_count);
 				for (uint32_t cur = cur_first; cur < cur_last; ++cur) {
-					const auto &ref = access_reference(m_references[cur]);
+					const auto &ref = access_reference(ref_begin[cur]);
 					ret.Expand(ref.aabb.GetCenter());
 				}
 			}
@@ -662,16 +697,16 @@ void ParallelSBVHBuilder::Task::_find_object_split_binned_parallel(ObjectSplit *
 	const glm::vec3 bin_widths = center_bound.GetExtent() / (float)kObjectBinNum, inv_bin_widths = 1.0f / bin_widths;
 
 	std::atomic_uint32_t counter{0};
-	auto compute_object_bins_func = [this, &bin_bases, &bin_widths, &inv_bin_widths, &counter]() {
+	auto compute_object_bins_func = [this, ref_begin, &bin_bases, &bin_widths, &inv_bin_widths, &counter]() {
 		std::array<std::array<ObjectBin, kObjectBinNum>, 3> ret{};
 
-		for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_references.size();
+		for (uint32_t cur_block = counter++; cur_block * kParallelForBlockSize < m_reference_count;
 		     cur_block = counter++) {
 			uint32_t cur_first = cur_block * kParallelForBlockSize,
-			         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, (uint32_t)m_references.size());
+			         cur_last = std::min((cur_block + 1) * kParallelForBlockSize, m_reference_count);
 
 			for (uint32_t cur = cur_first; cur < cur_last; ++cur) {
-				const auto &ref = access_reference(m_references[cur]);
+				const auto &ref = access_reference(ref_begin[cur]);
 				glm::u32vec3 bins = glm::clamp(glm::u32vec3((ref.aabb.GetCenter() - bin_bases) * inv_bin_widths), 0u,
 				                               kObjectBinNum - 1);
 				for (int dim = 0; dim < 3; ++dim) {
@@ -718,7 +753,7 @@ void ParallelSBVHBuilder::Task::_find_object_split_binned_parallel(ObjectSplit *
 		uint32_t left_num = 0;
 		for (uint32_t i = 1; i < kObjectBinNum; ++i) {
 			left_num += dim_bins[i - 1].cnt;
-			uint32_t right_num = m_references.size() - left_num;
+			uint32_t right_num = m_reference_count - left_num;
 
 			float sah = float(left_num) * left_aabb.GetArea() + float(right_num) * right_aabbs[i].GetArea();
 			if (sah < p_os->sah && left_num > 0 && right_num > 0) {
@@ -736,7 +771,7 @@ void ParallelSBVHBuilder::Task::_find_object_split_binned_parallel(ObjectSplit *
 }
 ParallelSBVHBuilder::Task::ObjectSplit ParallelSBVHBuilder::Task::find_object_split() {
 	ObjectSplit os{};
-	if (m_references.size() >= kObjectBinNum) {
+	if (m_reference_count >= kObjectBinNum) {
 		if (m_thread_count > 1)
 			_find_object_split_binned_parallel(&os);
 		else {
@@ -760,70 +795,57 @@ ParallelSBVHBuilder::Task::perform_object_split(const ObjectSplit &os) {
 }
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
 ParallelSBVHBuilder::Task::_perform_object_split(const ObjectSplit &os) {
-	auto &node = access_node(m_node_idx);
-	if (!node.left)
-		node.left = new_node();
-	if (!node.right)
-		node.right = new_node();
-
-	auto &left_node = access_node(node.left), &right_node = access_node(node.right);
+	auto [left_node, right_node] = maintain_child_nodes();
 	left_node.aabb = right_node.aabb = AABB();
+
+	uint32_t *ref_begin = get_reference_begin();
+	uint32_t *tmp_ref_block_begin = m_tmp_reference_block,
+	         *tmp_ref_block_end = m_tmp_reference_block + m_reference_block_size;
 
 	const float delta = 0.5f * os.bin_width;
 
-	// separate the bound into 3 parts
-	//[left_begin, left_end) - totally left part
-	//[left_end, right_begin) - the part to determined
-	//[right_begin, right_end) - totally right part
-	const uint32_t left_begin = 0, right_end = m_references.size();
-	uint32_t left_end = 0, right_begin = m_references.size();
-	for (uint32_t i = left_begin; i < right_begin; ++i) {
-		// put to left
-		const auto &ref = access_reference(m_references[i]);
+	uint32_t left_num = 0, right_num = 0;
+	uint32_t tbd_num = 0; // The number of references to be determined
+	for (uint32_t i = 0; i < m_reference_count; ++i) {
+		uint32_t ref_idx = ref_begin[i];
+		const auto &ref = access_reference(ref_idx);
 		float c = ref.aabb.GetDimCenter((int)os.dim);
 		if (c < os.pos - delta) {
 			left_node.aabb.Expand(ref.aabb);
-			std::swap(m_references[i], m_references[left_end++]);
+			*(tmp_ref_block_begin + (left_num++)) = ref_idx;
 		} else if (c > os.pos + delta) {
 			right_node.aabb.Expand(ref.aabb);
-			std::swap(m_references[i--], m_references[--right_begin]);
-		}
+			*(tmp_ref_block_end - (++right_num)) = ref_idx;
+		} else
+			std::swap(ref_begin[i], ref_begin[tbd_num++]);
 	}
 
-	if ((left_begin == left_end || right_begin == right_end) && left_end == right_begin)
+	if ((left_num == 0 || right_num == 0) && tbd_num == 0)
 		return {};
 
-	std::shuffle(m_references.begin() + left_end, m_references.begin() + right_begin, std::minstd_rand{});
-	while (left_end < right_begin) {
-		auto &cur_ref = access_reference(m_references[left_end]);
-		AABB lb = AABB{left_node.aabb, cur_ref.aabb};
-		AABB rb = AABB{right_node.aabb, cur_ref.aabb};
+	std::shuffle(ref_begin, ref_begin + tbd_num, std::minstd_rand{});
+	for (uint32_t i = 0; i < tbd_num; ++i) {
+		uint32_t ref_idx = ref_begin[i];
+		const auto &ref = access_reference(ref_idx);
 
-		float left_sah = lb.GetArea() * float(1 + left_end - left_begin) +
-		                 right_node.aabb.GetArea() * float(right_end - right_begin);
-		float right_sah =
-		    left_node.aabb.GetArea() * float(left_end - left_begin) + rb.GetArea() * float(1 + right_end - right_begin);
+		AABB lb = AABB{left_node.aabb, ref.aabb};
+		AABB rb = AABB{right_node.aabb, ref.aabb};
+		float left_sah = lb.GetArea() * float(1 + left_num) + right_node.aabb.GetArea() * float(right_num);
+		float right_sah = left_node.aabb.GetArea() * float(left_num) + rb.GetArea() * float(1 + right_num);
 
-		if (left_sah < right_sah || left_begin == left_end) { // unsplit to left
+		if (left_sah < right_sah || left_num == 0) { // unsplit to left
 			left_node.aabb = lb;
-			++left_end;
+			*(tmp_ref_block_begin + (left_num++)) = ref_idx;
 		} else {
 			right_node.aabb = rb;
-			std::swap(m_references[left_end], m_references[--right_begin]);
+			*(tmp_ref_block_end - (++right_num)) = ref_idx;
 		}
 	}
 
-	if (left_begin == left_end || right_begin == right_end)
+	if (left_num == 0 || right_num == 0)
 		return {};
 
-	std::vector<uint32_t> &left_refs = m_references;
-	std::vector<uint32_t> right_refs{m_references.begin() + right_begin, m_references.begin() + right_end};
-	left_refs.resize(left_end - left_begin);
-
-	auto [left_thread_count, right_thread_count] = get_child_thread_counts(left_refs.size(), right_refs.size());
-	return {Task{m_p_builder, node.left, std::move(left_refs), m_depth + 1, m_thread, left_thread_count},
-	        Task{m_p_builder, node.right, std::move(right_refs), m_depth + 1, m_thread + left_thread_count,
-	             right_thread_count}};
+	return split_task(left_num, right_num, true);
 }
 /* std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task>
 ParallelSBVHBuilder::Task::_perform_object_split_parallel(const ObjectSplit &os) {
@@ -839,30 +861,25 @@ ParallelSBVHBuilder::Task::_perform_object_split_parallel(const ObjectSplit &os)
 }*/
 
 std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBuilder::Task::perform_default_split() {
-	spdlog::warn("Default split, {}", m_references.size());
-	uint32_t left_num = m_references.size() >> 1u;
+	spdlog::warn("Default split, {}", m_reference_count);
 
-	auto &node = access_node(m_node_idx);
-	if (!node.left)
-		node.left = new_node();
-	if (!node.right)
-		node.right = new_node();
+	auto [left_node, right_node] = maintain_child_nodes();
 
-	auto &left_node = access_node(node.left), &right_node = access_node(node.right);
-	left_node.aabb = access_reference(m_references[0]).aabb;
+	uint32_t left_num = m_reference_count >> 1u, right_num = m_reference_count - left_num;
+	auto ref_begin = get_reference_begin();
+	left_node.aabb = access_reference(ref_begin[0]).aabb;
 	for (uint32_t i = 1; i < left_num; ++i)
-		left_node.aabb.Expand(access_reference(m_references[i]).aabb);
+		left_node.aabb.Expand(access_reference(ref_begin[i]).aabb);
 
-	right_node.aabb = access_reference(m_references[left_num]).aabb;
-	for (uint32_t i = left_num + 1; i < m_references.size(); ++i)
-		right_node.aabb.Expand(access_reference(m_references[i]).aabb);
+	right_node.aabb = access_reference(ref_begin[left_num]).aabb;
+	for (uint32_t i = left_num + 1; i < m_reference_count; ++i)
+		right_node.aabb.Expand(access_reference(ref_begin[i]).aabb);
 
-	std::vector<uint32_t> &left_refs = m_references;
-	std::vector<uint32_t> right_refs{m_references.begin() + left_num, m_references.end()};
-	left_refs.resize(left_num);
+	if (m_reference_alignment == kAlignLeft)
+		std::copy(ref_begin + left_num, ref_begin + m_reference_count,
+		          m_reference_block + m_reference_block_size - right_num);
+	else
+		std::copy(ref_begin, ref_begin + left_num, m_reference_block);
 
-	auto [left_thread_count, right_thread_count] = get_child_thread_counts(left_refs.size(), right_refs.size());
-	return {Task{m_p_builder, node.left, std::move(left_refs), m_depth + 1, m_thread, left_thread_count},
-	        Task{m_p_builder, node.right, std::move(right_refs), m_depth + 1, m_thread + left_thread_count,
-	             right_thread_count}};
+	return split_task(left_num, right_num, false);
 }

@@ -7,6 +7,9 @@
 
 #include <atomic>
 #include <cinttypes>
+#include <cstdlib>
+#include <spdlog/spdlog.h>
+#include <vector>
 
 template <class T> class AtomicAllocator {
 private:
