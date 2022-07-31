@@ -42,7 +42,6 @@ public:
 	~AtomicBinaryBVH() override = default;
 
 	friend class ParallelSBVHBuilder;
-	friend class PSSBVHBuilder;
 };
 
 #endif

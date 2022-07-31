@@ -44,45 +44,14 @@ private:
 	template <typename Iter> inline void sort_references(Iter first_ref, Iter last_ref, uint32_t dim);
 	inline std::tuple<Reference, Reference> split_reference(const Reference &ref, uint32_t dim, float pos) const;
 
-	class ReferenceBlockAllocator {
-	private:
-		std::vector<uint32_t> m_buffer;
-		std::atomic_uint32_t m_buffer_counter{0};
-		std::atomic<void *> m_list{};
-
-	public:
-		inline ReferenceBlockAllocator(const ReferenceBlockAllocator &r) = delete;
-		inline ReferenceBlockAllocator &operator=(const ReferenceBlockAllocator &r) = delete;
-		inline ReferenceBlockAllocator(ReferenceBlockAllocator &&r) noexcept = delete;
-		inline ReferenceBlockAllocator &operator=(ReferenceBlockAllocator &&r) noexcept = delete;
-
-		inline ReferenceBlockAllocator(uint32_t buffer_size) : m_buffer(buffer_size) {}
-		inline ~ReferenceBlockAllocator() {
-			void *cur = m_list.load(std::memory_order_acquire);
-			while (cur) {
-				void *next = *((void **)cur);
-				free(cur);
-				cur = next;
-			}
-		}
-		inline uint32_t *Alloc(uint32_t count) {
-			uint32_t buffer_begin = m_buffer_counter.fetch_add(count);
-			if (buffer_begin + count < m_buffer.size())
-				return m_buffer.data() + buffer_begin;
-			m_buffer_counter.fetch_sub(count);
-			// Fallback to atomic linked list allocation
-			void *cur = std::malloc(sizeof(void *) + count * sizeof(uint32_t));
-			void *(&next) = *((void **)cur);
-			next = m_list.load(std::memory_order_relaxed);
-			while (!m_list.compare_exchange_weak(next, cur, std::memory_order_release, std::memory_order_relaxed))
-				;
-			return (uint32_t *)((uint8_t *)cur + sizeof(void *));
-		}
-	};
-	ReferenceBlockAllocator m_reference_block_allocator;
-	std::tuple<uint32_t *, uint32_t *, uint32_t> alloc_reference_block(uint32_t origin_ref_cnt) {
+	AtomicBlockAllocator<uint32_t> m_reference_block_pool;
+	std::vector<LocalBlockAllocator<uint32_t>> m_thread_reference_block_allocators;
+	std::tuple<uint32_t *, uint32_t *, uint32_t> alloc_reference_block(LocalBlockAllocator<uint32_t> *p_block_allocator,
+	                                                                   uint32_t origin_ref_cnt) {
 		auto single_size = GetReferenceBlockSize(origin_ref_cnt);
-		uint32_t *begin = m_reference_block_allocator.Alloc(single_size << 1u);
+		uint32_t *begin = p_block_allocator->Alloc(single_size << 1u);
+		if (begin == nullptr)
+			return {nullptr, nullptr, 0};
 		return {begin, begin + single_size, single_size};
 	}
 
@@ -201,12 +170,6 @@ private:
 			return m_p_builder->m_node_pool[node_idx];
 		}
 		inline Reference &access_reference(uint32_t ref_idx) const { return m_p_builder->m_reference_pool[ref_idx]; }
-		inline std::tuple<uint32_t *, uint32_t *> get_reference_range() const {
-			return m_reference_alignment == kAlignLeft
-			           ? std::make_tuple(m_reference_block, m_reference_block + m_reference_count)
-			           : std::make_tuple(m_reference_block + m_reference_block_size - m_reference_count,
-			                             m_reference_block + m_reference_block_size);
-		}
 		inline uint32_t *get_reference_begin() const {
 			return m_reference_alignment == kAlignLeft ? m_reference_block
 			                                           : m_reference_block + m_reference_block_size - m_reference_count;
@@ -231,6 +194,10 @@ private:
 		inline uint32_t new_node() const { return m_p_builder->m_thread_node_allocators[m_thread].Alloc(); }
 		inline uint32_t new_reference(uint32_t idx = 0) const {
 			return m_p_builder->m_thread_reference_allocators[m_thread + idx].Alloc();
+		}
+		inline std::tuple<uint32_t *, uint32_t *, uint32_t> new_reference_block(uint32_t origin_ref_cnt) {
+			return m_p_builder->alloc_reference_block(
+			    m_p_builder->m_thread_reference_block_allocators.data() + m_thread, origin_ref_cnt);
 		}
 
 	public:
@@ -272,8 +239,7 @@ public:
 	explicit ParallelSBVHBuilder(AtomicBinaryBVH *p_bvh)
 	    : kThreadCount(std::max(1u, std::thread::hardware_concurrency())), m_bvh{*p_bvh},
 	      m_node_pool{p_bvh->m_node_pool}, m_scene(*p_bvh->GetScenePtr()),
-	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetArea() * 1e-5f},
-	      m_reference_block_allocator(p_bvh->GetScenePtr()->GetTriangles().size() * 8) {}
+	      m_config(p_bvh->GetConfig()), m_min_overlap_area{p_bvh->GetScenePtr()->GetAABB().GetArea() * 1e-5f} {}
 	void Run();
 };
 

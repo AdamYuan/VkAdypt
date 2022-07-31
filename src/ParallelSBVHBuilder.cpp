@@ -13,12 +13,17 @@ void ParallelSBVHBuilder::Run() {
 	m_producer_tokens.reserve(kThreadCount);
 	m_thread_node_allocators.reserve(kThreadCount);
 	m_thread_reference_allocators.reserve(kThreadCount);
-	// m_thread_tmp_references.resize(kThreadCount);
+	m_thread_reference_block_allocators.reserve(kThreadCount);
 	for (uint32_t i = 0; i < kThreadCount; ++i) {
 		m_consumer_tokens.emplace_back(m_task_queue);
 		m_producer_tokens.emplace_back(m_task_queue);
 		m_thread_node_allocators.emplace_back(m_bvh.m_node_pool);
 		m_thread_reference_allocators.emplace_back(m_reference_pool);
+		if (i == 0)
+			m_thread_reference_block_allocators.emplace_back(
+			    m_reference_block_pool, GetReferenceBlockSize(m_scene.GetTriangles().size()) << 1u);
+		else
+			m_thread_reference_block_allocators.emplace_back(m_reference_block_pool);
 	}
 
 	spdlog::info("Begin, threshold = {}", kLocalRunThreshold);
@@ -36,7 +41,7 @@ ParallelSBVHBuilder::Task ParallelSBVHBuilder::make_root_task() {
 	assert(root_idx == 0);
 	m_node_pool[root_idx].aabb = m_scene.GetAABB();
 	auto [reference_block, tmp_reference_block, reference_block_size] =
-	    alloc_reference_block(m_scene.GetTriangles().size());
+	    alloc_reference_block(m_thread_reference_block_allocators.data(), m_scene.GetTriangles().size());
 	{
 		for (uint32_t i = 0; i < m_scene.GetTriangles().size(); ++i) {
 			uint32_t ref_idx = m_thread_reference_allocators[0].Alloc();
@@ -394,7 +399,9 @@ ParallelSBVHBuilder::Task::_perform_spatial_split(const SpatialSplit &ss) {
 	uint32_t *ref_block = m_reference_block, *tmp_ref_block = m_tmp_reference_block,
 	         ref_block_size = m_reference_block_size;
 	if (ss.ref_cnt > m_reference_block_size) {
-		std::tie(ref_block, tmp_ref_block, ref_block_size) = m_p_builder->alloc_reference_block(ss.ref_cnt);
+		std::tie(ref_block, tmp_ref_block, ref_block_size) = new_reference_block(ss.ref_cnt);
+		if (ref_block == nullptr)
+			return {};
 	}
 	uint32_t *tmp_ref_block_begin = tmp_ref_block, *tmp_ref_block_end = tmp_ref_block + ref_block_size;
 
