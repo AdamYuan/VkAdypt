@@ -18,10 +18,11 @@ public:
 
 private:
 	const uint32_t kThreadCount;
-	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
-	static constexpr uint32_t kParallelForBlockSize = 64;
+	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 16;
 	static constexpr uint32_t kLocalRunThreshold = 512;
-	inline static constexpr uint32_t GetReferenceBlockSize(uint32_t ref_cnt) { return ref_cnt * 3 / 2; }
+	static constexpr uint32_t kLocalReferenceCount = 512;
+	inline static constexpr uint32_t GetReferenceBlockSize(uint32_t ref_cnt) { return ref_cnt * 4 / 3; }
+	inline static constexpr uint32_t GetParallelForBlockSize(uint32_t ref_cnt) { return std::max(64u, ref_cnt >> 9u); }
 
 	AtomicBinaryBVH &m_bvh;
 	const Scene &m_scene;
@@ -46,8 +47,8 @@ private:
 
 	AtomicBlockAllocator<uint32_t> m_reference_block_pool;
 	std::vector<LocalBlockAllocator<uint32_t>> m_thread_reference_block_allocators;
-	std::tuple<uint32_t *, uint32_t *, uint32_t> alloc_reference_block(LocalBlockAllocator<uint32_t> *p_block_allocator,
-	                                                                   uint32_t origin_ref_cnt) {
+	static std::tuple<uint32_t *, uint32_t *, uint32_t>
+	alloc_reference_block(LocalBlockAllocator<uint32_t> *p_block_allocator, uint32_t origin_ref_cnt) {
 		auto single_size = GetReferenceBlockSize(origin_ref_cnt);
 		uint32_t *begin = p_block_allocator->Alloc(single_size << 1u);
 		if (begin == nullptr)
@@ -137,7 +138,7 @@ private:
 		inline SpatialSplit find_spatial_split();
 		inline std::tuple<Task, Task> perform_spatial_split(const SpatialSplit &ss);
 		inline std::tuple<Task, Task> _perform_spatial_split(const SpatialSplit &ss);
-		// inline std::tuple<Task, Task> _perform_spatial_split_parallel(const SpatialSplit &ss);
+		inline std::tuple<Task, Task> _perform_spatial_split_parallel(const SpatialSplit &ss);
 
 		template <uint32_t DIM> inline void _find_object_split_sweep_dim(ObjectSplit *p_os);
 		template <uint32_t DIM> inline void _find_object_split_binned_dim(ObjectSplit *p_os);
@@ -145,6 +146,7 @@ private:
 		inline ObjectSplit find_object_split();
 		inline std::tuple<Task, Task> perform_object_split(const ObjectSplit &os);
 		inline std::tuple<Task, Task> _perform_object_split(const ObjectSplit &os);
+		inline std::tuple<Task, Task> _perform_object_split_parallel(const ObjectSplit &os);
 		inline std::tuple<AtomicBinaryBVH::Node &, AtomicBinaryBVH::Node &> maintain_child_nodes() {
 			auto &node = access_node(m_node_index);
 			if (!node.left)
@@ -153,7 +155,6 @@ private:
 				node.right = new_node();
 			return {access_node(node.left), access_node(node.right)};
 		}
-		// inline std::tuple<Task, Task> _perform_object_split_parallel(const ObjectSplit &os);
 
 		inline std::tuple<Task, Task> perform_default_split();
 

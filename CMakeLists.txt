@@ -16,6 +16,15 @@ if (MSVC)
     set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
 endif ()
 
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT IPO_SUPPORTED)
+    if (IPO_SUPPORTED)
+        message("Enable IPO")
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+    endif ()
+endif ()
+
 add_subdirectory(dep)
 add_subdirectory(shader)
 

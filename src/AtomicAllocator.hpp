@@ -32,7 +32,7 @@ public:
 			delete m_chunks[i];
 	}
 	inline uint32_t AllocChunk() {
-		uint32_t id = m_head++;
+		uint32_t id = m_head.fetch_add(1, std::memory_order_relaxed);
 		m_chunks[id] = new Node{};
 		return id << 16u;
 	}
@@ -82,7 +82,7 @@ public:
 			delete[] m_chunks[i];
 	}
 	inline T *AllocChunk(uint32_t count) {
-		uint32_t id = m_head++;
+		uint32_t id = m_head.fetch_add(1, std::memory_order_relaxed);
 		if (id > 0xffffu)
 			return nullptr;
 		m_chunks[id] = new T[count];
