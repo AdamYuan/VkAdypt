@@ -29,9 +29,11 @@ void ParallelSBVHBuilder::Run() {
 	spdlog::info("Begin, threshold = {}", kLocalRunThreshold);
 	auto begin = std::chrono::high_resolution_clock::now();
 	make_root_task().BlockRun();
-	spdlog::info("End {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(
-	                              std::chrono::high_resolution_clock::now() - begin)
-	                              .count());
+	spdlog::info(
+	    "End {} ms, {} nodes, {} leaves",
+	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - begin)
+	        .count(),
+	    m_bvh.get_node_range(), m_leaf_count);
 
 	m_bvh.m_leaf_cnt = m_leaf_count;
 }
@@ -116,7 +118,6 @@ void ParallelSBVHBuilder::Task::BlockRun() {
 			m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(left_task));
 			m_p_builder->m_task_queue.enqueue(get_queue_producer_token(), std::move(right_task));
 		}
-
 		Task task;
 		while (m_p_builder->m_task_count.load()) {
 			if (m_p_builder->m_task_queue.try_dequeue(get_queue_consumer_token(), task)) {
@@ -178,16 +179,13 @@ ParallelSBVHBuilder::split_reference(const ParallelSBVHBuilder::Reference &ref, 
 			right.aabb.Expand(v0);
 
 		if ((p0 < pos && pos < p1) || (p1 < pos && pos < p0)) { // Edges
-			glm::vec3 x = glm::mix(v0, v1, glm::clamp((pos - p0) / (p1 - p0), 0.0f, 1.0f));
+			glm::vec3 x = glm::mix(v0, v1, (pos - p0) / (p1 - p0));
 			left.aabb.Expand(x);
 			right.aabb.Expand(x);
 		}
 	}
 
-	left.aabb.max[(int)dim] = pos;
 	left.aabb.IntersectAABB(ref.aabb);
-
-	right.aabb.min[(int)dim] = pos;
 	right.aabb.IntersectAABB(ref.aabb);
 
 	return {left, right};
@@ -237,7 +235,7 @@ template <uint32_t DIM> void ParallelSBVHBuilder::Task::_find_spatial_split_dim(
 
 	std::fill(spatial_bins, spatial_bins + kSpatialBinNum, SpatialBin{AABB(), 0, 0}); // initialize bins
 	auto &node = access_node(m_node_index);
-	const float bin_width = node.aabb.GetExtent()[DIM] / kSpatialBinNum, inv_bin_width = 1.0f / bin_width;
+	const float bin_width = node.aabb.GetExtent()[DIM] / (float)kSpatialBinNum, inv_bin_width = 1.0f / bin_width;
 	const float bound_base = node.aabb.min[DIM];
 
 	// Put references into bins

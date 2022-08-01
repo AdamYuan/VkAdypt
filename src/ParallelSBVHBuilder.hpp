@@ -18,10 +18,10 @@ public:
 
 private:
 	const uint32_t kThreadCount;
-	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 16;
+	static constexpr uint32_t kSpatialBinNum = 32, kObjectBinNum = 32;
 	static constexpr uint32_t kLocalRunThreshold = 512;
 	static constexpr uint32_t kLocalReferenceCount = 512;
-	inline static constexpr uint32_t GetReferenceBlockSize(uint32_t ref_cnt) { return ref_cnt * 4 / 3; }
+	inline static constexpr uint32_t GetReferenceBlockSize(uint32_t ref_cnt) { return ref_cnt * 3 / 2; }
 	inline static constexpr uint32_t GetParallelForBlockSize(uint32_t ref_cnt) { return std::max(64u, ref_cnt >> 9u); }
 
 	AtomicBinaryBVH &m_bvh;
@@ -108,9 +108,9 @@ private:
 
 	private:
 		ParallelSBVHBuilder *m_p_builder{};
+		uint32_t m_reference_count{};
+		uint32_t m_reference_block_size{}, *m_reference_block{}, *m_tmp_reference_block{};
 		ReferenceAlignment m_reference_alignment{kAlignLeft};
-		uint32_t m_reference_count{}, m_reference_block_size;
-		uint32_t *m_reference_block{}, *m_tmp_reference_block{};
 
 		uint32_t m_node_index{};
 		uint32_t m_depth{}, m_thread{}, m_thread_count{};
