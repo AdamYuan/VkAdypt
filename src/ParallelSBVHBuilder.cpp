@@ -882,11 +882,9 @@ std::tuple<ParallelSBVHBuilder::Task, ParallelSBVHBuilder::Task> ParallelSBVHBui
 	for (uint32_t i = left_num + 1; i < m_reference_count; ++i)
 		right_node.aabb.Expand(access_reference(ref_begin[i]).aabb);
 
-	if (m_reference_alignment == kAlignLeft)
-		std::copy(ref_begin + left_num, ref_begin + m_reference_count,
-		          m_reference_block + m_reference_block_size - right_num);
-	else
-		std::copy(ref_begin, ref_begin + left_num, m_reference_block);
+	std::copy(ref_begin, ref_begin + left_num, m_tmp_reference_block);
+	std::copy(ref_begin + left_num, ref_begin + m_reference_count,
+	          m_tmp_reference_block + m_reference_block_size - right_num);
 
-	return split_task(left_num, right_num, false);
+	return split_task(left_num, right_num, true);
 }
