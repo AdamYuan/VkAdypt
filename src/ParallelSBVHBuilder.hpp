@@ -136,9 +136,7 @@ private:
 		inline void _find_spatial_split_parallel(SpatialSplit *p_ss);
 		inline SpatialSplit find_spatial_split();
 		inline std::tuple<Task, Task> perform_spatial_split(const SpatialSplit &ss);
-		inline std::tuple<Task, Task> _perform_spatial_split_inplace(const SpatialSplit &ss);
-		inline std::tuple<Task, Task> _perform_spatial_split_tmp(const SpatialSplit &ss, uint32_t *ref_block,
-		                                                         uint32_t *tmp_ref_block, uint32_t ref_block_size);
+		inline std::tuple<Task, Task> _perform_spatial_split(const SpatialSplit &ss);
 		// inline std::tuple<Task, Task> _perform_spatial_split_parallel(const SpatialSplit &ss);
 
 		template <uint32_t DIM> inline void _find_object_split_sweep_dim(ObjectSplit *p_os);
@@ -146,7 +144,7 @@ private:
 		inline void _find_object_split_binned_parallel(ObjectSplit *p_os);
 		inline ObjectSplit find_object_split();
 		inline std::tuple<Task, Task> perform_object_split(const ObjectSplit &os);
-		inline std::tuple<Task, Task> _perform_object_split_inplace(const ObjectSplit &os);
+		inline std::tuple<Task, Task> _perform_object_split(const ObjectSplit &os);
 		inline std::tuple<AtomicBinaryBVH::Node &, AtomicBinaryBVH::Node &> maintain_child_nodes() {
 			auto &node = access_node(m_node_index);
 			if (!node.left)
