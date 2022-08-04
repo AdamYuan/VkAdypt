@@ -55,7 +55,7 @@ void SBVHBuilder::_find_object_split_dim(const SBVHBuilder::NodeSpec &t_spec, SB
 
 	AABB left_aabb = refs->m_aabb;
 	for (uint32_t i = 1; i <= t_spec.m_ref_num - 1; ++i) {
-		float sah = float(i) * left_aabb.GetArea() + float(t_spec.m_ref_num - i) * m_right_aabbs[i].GetArea();
+		float sah = float(i) * left_aabb.GetHalfArea() + float(t_spec.m_ref_num - i) * m_right_aabbs[i].GetHalfArea();
 		if (sah < t_os->sah) {
 			t_os->dim = DIM;
 			t_os->pos = (refs[i - 1].m_aabb.GetDimCenter<DIM>() + refs[i].m_aabb.GetDimCenter<DIM>()) * 0.5f;
@@ -146,7 +146,7 @@ void SBVHBuilder::_find_spatial_split_dim(const SBVHBuilder::NodeSpec &t_spec, S
 		left_num += m_spatial_bins[i - 1].m_in;
 		right_num -= m_spatial_bins[i - 1].m_out;
 
-		float sah = float(left_num) * left_aabb.GetArea() + float(right_num) * m_right_aabbs[i].GetArea();
+		float sah = float(left_num) * left_aabb.GetHalfArea() + float(right_num) * m_right_aabbs[i].GetHalfArea();
 		if (sah < t_ss->m_sah) {
 			t_ss->m_sah = sah;
 			t_ss->m_dim = DIM;
@@ -208,9 +208,9 @@ void SBVHBuilder::perform_spatial_split(const SBVHBuilder::NodeSpec &t_spec, con
 		auto lbc = float(1 + left_end - left_begin);
 		auto rbc = float(1 + right_end - right_begin);
 
-		float unsplit_left_sah = lub.GetArea() * lbc + t_right->m_aabb.GetArea() * rac;
-		float unsplit_right_sah = t_left->m_aabb.GetArea() * lac + rub.GetArea() * rbc;
-		float duplicate_sah = ldb.GetArea() * lbc + rdb.GetArea() * rbc;
+		float unsplit_left_sah = lub.GetHalfArea() * lbc + t_right->m_aabb.GetHalfArea() * rac;
+		float unsplit_right_sah = t_left->m_aabb.GetHalfArea() * lac + rub.GetHalfArea() * rbc;
+		float duplicate_sah = ldb.GetHalfArea() * lbc + rdb.GetHalfArea() * rbc;
 
 		if (unsplit_left_sah < unsplit_right_sah && unsplit_left_sah < duplicate_sah) { // unsplit left
 			t_left->m_aabb = lub;
@@ -258,10 +258,10 @@ void SBVHBuilder::perform_object_split(const SBVHBuilder::NodeSpec &t_spec, cons
 		AABB lb = AABB{t_left->m_aabb, m_refstack[refs + left_end].m_aabb};
 		AABB rb = AABB{t_right->m_aabb, m_refstack[refs + left_end].m_aabb};
 
-		float left_sah = lb.GetArea() * float(1 + left_end - left_begin) +
-		                 t_right->m_aabb.GetArea() * float(right_end - right_begin);
-		float right_sah =
-		    t_left->m_aabb.GetArea() * float(left_end - left_begin) + rb.GetArea() * float(1 + right_end - right_begin);
+		float left_sah = lb.GetHalfArea() * float(1 + left_end - left_begin) +
+		                 t_right->m_aabb.GetHalfArea() * float(right_end - right_begin);
+		float right_sah = t_left->m_aabb.GetHalfArea() * float(left_end - left_begin) +
+		                  rb.GetHalfArea() * float(1 + right_end - right_begin);
 
 		if (left_sah < right_sah || left_begin == left_end) { // unsplit to left
 			t_left->m_aabb = lb;
@@ -287,7 +287,7 @@ uint32_t SBVHBuilder::build_node(const NodeSpec &t_spec, uint32_t t_depth) {
 	if (t_depth <= m_config.m_max_spatial_depth) {
 		AABB overlap = object_split.left_aabb;
 		overlap.IntersectAABB(object_split.right_aabb);
-		if (overlap.GetArea() >= m_min_overlap_area)
+		if (overlap.GetHalfArea() >= m_min_overlap_area)
 			find_spatial_split(t_spec, &spatial_split);
 	}
 

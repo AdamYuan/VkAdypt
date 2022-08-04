@@ -117,7 +117,7 @@ public:
 		m_chunk = m_allocator_ref.AllocChunk(m_chunk_size);
 	}
 	inline T *Alloc(uint32_t count) {
-		if (m_chunk && m_counter + count < m_chunk_size) {
+		if (m_chunk && m_counter + count <= m_chunk_size) {
 			uint32_t idx = m_counter;
 			m_counter += count;
 			return m_chunk + idx;

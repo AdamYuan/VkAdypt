@@ -1,6 +1,7 @@
 #include "Application.hpp"
 
 #include "Config.hpp"
+#include "PSSBVHBuilder.hpp"
 #include "ParallelSBVHBuilder.hpp"
 #include "SBVHBuilder.hpp"
 #include <spdlog/spdlog.h>

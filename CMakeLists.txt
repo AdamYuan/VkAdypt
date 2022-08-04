@@ -23,6 +23,9 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
         message("Enable IPO")
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif ()
+    if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast")
+    endif ()
 endif ()
 
 add_subdirectory(dep)
@@ -53,6 +56,8 @@ add_executable(Adypt
 
         src/SBVHBuilder.hpp
         src/SBVHBuilder.cpp
+        src/PSSBVHBuilder.cpp
+        src/PSSBVHBuilder.hpp
         src/ParallelSBVHBuilder.cpp
         src/ParallelSBVHBuilder.hpp
 
